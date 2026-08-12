@@ -24,6 +24,12 @@ class CredentialCipher:
     def encrypt_json(self, value: dict[str, str]) -> str:
         return self.encrypt(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
+    def decrypt_json(self, value: str) -> dict:
+        decoded = json.loads(self.decrypt(value))
+        if not isinstance(decoded, dict):
+            raise ValueError("encrypted credential must contain a JSON object")
+        return decoded
+
 
 @lru_cache
 def get_credential_cipher() -> CredentialCipher:

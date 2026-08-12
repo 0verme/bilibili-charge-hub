@@ -15,6 +15,7 @@ from app.bilibili.client import (
 )
 from app.crypto import get_credential_cipher
 from app.models import AccountStatus, BiliAccount, ChargeRecord, JobRun, RunStatus
+from app.notifications.service import enqueue_event
 
 PAGE_SIZE = 50
 MAX_PAGES = 100
@@ -138,6 +139,17 @@ class ChargeCollectionService:
                         with db.begin_nested():
                             db.add(record)
                             db.flush()
+                            enqueue_event(
+                                db,
+                                account.user_id,
+                                "new_charge",
+                                f"charge:{account.id}:{record.event_id}",
+                                {
+                                    "supporter": record.supporter_name,
+                                    "amount": str(record.amount),
+                                    "charged_at": record.charged_at.isoformat(),
+                                },
+                            )
                         inserted += 1
                     except IntegrityError:
                         pass
@@ -151,10 +163,31 @@ class ChargeCollectionService:
             account.status = AccountStatus.EXPIRED
             run.status = RunStatus.FAILED
             run.error = "Bilibili account authentication expired"
+            enqueue_event(
+                db,
+                account.user_id,
+                "cookie_expired",
+                f"cookie:{account.id}",
+                {"account": account.display_name or account.bili_uid},
+            )
+            enqueue_event(
+                db,
+                account.user_id,
+                "collection_failed",
+                f"collection:{run.id}",
+                {"account": account.display_name or account.bili_uid, "reason": "login expired"},
+            )
             raise
         except Exception as exc:
             run.status = RunStatus.FAILED
             run.error = str(exc)[:1000]
+            enqueue_event(
+                db,
+                account.user_id,
+                "collection_failed",
+                f"collection:{run.id}",
+                {"account": account.display_name or account.bili_uid, "reason": "request failed"},
+            )
             raise
         finally:
             finished = datetime.now(UTC)

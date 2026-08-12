@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.bilibili.client import BilibiliAuthenticationError, BilibiliClient
 from app.crypto import get_credential_cipher
 from app.models import AccountStatus, BiliAccount, CouponClaim, JobRun, RunStatus
+from app.notifications.service import enqueue_event
 
 
 @dataclass(slots=True)
@@ -76,11 +77,37 @@ class CouponClaimService:
             run.result = {"status": result.status, "claim_id": claim.id}
             if result.status == "error":
                 run.error = result.message
+            event_type = (
+                "coupon_claim_succeeded"
+                if result.status in {"success", "already_claimed"}
+                else "coupon_claim_failed"
+            )
+            enqueue_event(
+                db,
+                account.user_id,
+                event_type,
+                f"coupon:{account.id}:{month}:{result.status}",
+                {"account": account.display_name or account.bili_uid, "status": result.status},
+            )
             return CouponClaimOutcome(claim.id, claim.status, claim.message, run.id)
         except BilibiliAuthenticationError:
             account.status = AccountStatus.EXPIRED
             run.status = RunStatus.FAILED
             run.error = "Bilibili account authentication expired"
+            enqueue_event(
+                db,
+                account.user_id,
+                "cookie_expired",
+                f"cookie:{account.id}",
+                {"account": account.display_name or account.bili_uid},
+            )
+            enqueue_event(
+                db,
+                account.user_id,
+                "coupon_claim_failed",
+                f"coupon:{account.id}:{month}:expired",
+                {"account": account.display_name or account.bili_uid, "reason": "login expired"},
+            )
             raise
         except Exception as exc:
             run.status = RunStatus.FAILED

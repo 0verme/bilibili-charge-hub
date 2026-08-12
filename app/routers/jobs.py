@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
 class JobInput(BaseModel):
-    bili_account_id: str
+    bili_account_id: str | None = None
     kind: JobKind
     interval_seconds: int | None = Field(default=None, ge=10)
     cron: str | None = None
@@ -23,6 +23,9 @@ class JobInput(BaseModel):
     def exactly_one_trigger(self) -> "JobInput":
         if (self.interval_seconds is None) == (self.cron is None):
             raise ValueError("provide exactly one of interval_seconds or cron")
+        account_kinds = {JobKind.CHARGE_COLLECTION, JobKind.COUPON_CLAIM, JobKind.COOKIE_CHECK}
+        if self.kind in account_kinds and self.bili_account_id is None:
+            raise ValueError("this job kind requires bili_account_id")
         return self
 
 
@@ -86,7 +89,8 @@ def create_job(
     db: DbSession,
     scheduler: SchedulerDep,
 ) -> ScheduleJob:
-    require_tenant_account(db, user.id, payload.bili_account_id)
+    if payload.bili_account_id:
+        require_tenant_account(db, user.id, payload.bili_account_id)
     trigger_type = "interval" if payload.interval_seconds is not None else "cron"
     trigger_config = (
         {"seconds": payload.interval_seconds}

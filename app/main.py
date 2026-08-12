@@ -13,6 +13,7 @@ from app.routers.auth import users_router
 from app.routers.charges import router as charges_router
 from app.routers.coupons import router as coupons_router
 from app.routers.jobs import router as jobs_router
+from app.routers.notifications import router as notifications_router
 from app.services.scheduler import SchedulerManager
 from app.settings import get_settings
 
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     application.include_router(charges_router)
     application.include_router(coupons_router)
     application.include_router(jobs_router)
+    application.include_router(notifications_router)
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -68,8 +70,10 @@ def create_app() -> FastAPI:
                 "idempotent_charge_storage",
                 "persistent_scheduling",
                 "monthly_coupon_claim",
+                "notification_plugins",
+                "reliable_notification_delivery",
             ],
-            "milestone": "M4",
+            "milestone": "M5",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)

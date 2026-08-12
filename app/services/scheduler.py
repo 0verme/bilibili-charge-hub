@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.bilibili.client import BilibiliClient
 from app.models import BiliAccount, JobKind, ScheduleJob
+from app.notifications.service import NotificationDeliveryService, enqueue_event
 from app.services.collection import ChargeCollectionService
 from app.services.coupon import CouponClaimService
 
@@ -77,7 +78,16 @@ class SchedulerManager:
         try:
             with self.factory() as db:
                 job = db.get(ScheduleJob, job_id)
-                if job is None or not job.enabled or not job.bili_account_id:
+                if job is None or not job.enabled:
+                    return
+                if job.kind == JobKind.NOTIFICATION_RETRY:
+                    delivery = NotificationDeliveryService()
+                    try:
+                        await delivery.process_pending(db, job.user_id)
+                    finally:
+                        await delivery.close()
+                    return
+                if not job.bili_account_id:
                     return
                 account = db.scalar(
                     select(BiliAccount).where(
@@ -96,5 +106,16 @@ class SchedulerManager:
                     await handler(db, account, job.id)
         except Exception:
             logger.exception("scheduled job failed", extra={"job_id": job_id})
+            with self.factory() as db:
+                failed_job = db.get(ScheduleJob, job_id)
+                if failed_job:
+                    enqueue_event(
+                        db,
+                        failed_job.user_id,
+                        "scheduled_job_failed",
+                        f"scheduled:{job_id}",
+                        {"job_id": job_id, "kind": failed_job.kind.value},
+                    )
+                    db.commit()
         finally:
             await client.close()
