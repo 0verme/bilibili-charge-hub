@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from app.routers.accounts import router as accounts_router
 from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
+from app.routers.charges import router as charges_router
 from app.settings import get_settings
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
     application.include_router(accounts_router)
     application.include_router(auth_router)
     application.include_router(users_router)
+    application.include_router(charges_router)
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -50,8 +52,10 @@ def create_app() -> FastAPI:
                 "core_database_schema",
                 "bilibili_qr_login",
                 "multi_bilibili_accounts",
+                "paginated_charge_collection",
+                "idempotent_charge_storage",
             ],
-            "milestone": "M2",
+            "milestone": "M3",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)

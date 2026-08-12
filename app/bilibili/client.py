@@ -5,6 +5,7 @@ import httpx
 
 GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+CHARGE_RECORDS_URL = "https://pay.bilibili.com/bk/brokerage/listForCustomerRechargeRecord"
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://www.bilibili.com",
@@ -38,6 +39,16 @@ class QrPollResult:
     message: str
     cookies: dict[str, str] | None = None
     refresh_token: str | None = None
+
+
+@dataclass(slots=True)
+class ChargePage:
+    items: list[dict]
+    has_more: bool
+
+
+class BilibiliAuthenticationError(BilibiliApiError):
+    pass
 
 
 class BilibiliClient:
@@ -80,6 +91,31 @@ class BilibiliClient:
             cookies=cookies,
             refresh_token=data.get("refresh_token") or None,
         )
+
+    async def fetch_charge_page(
+        self,
+        cookie_header: str,
+        page: int,
+        page_size: int = 50,
+    ) -> ChargePage:
+        response = await self._client.get(
+            CHARGE_RECORDS_URL,
+            params={"currentPage": page, "pageSize": page_size, "customerId": "10026"},
+            headers={"Cookie": cookie_header, "Referer": "https://pay.bilibili.com/"},
+        )
+        response.raise_for_status()
+        body = response.json()
+        if body.get("code") in {-101, -111, -400, 61000}:
+            raise BilibiliAuthenticationError("Bilibili account authentication expired")
+        data = body.get("data") or {}
+        items = data.get("result") or []
+        if not isinstance(items, list):
+            raise BilibiliApiError("unexpected charge record response")
+        total = data.get("total") or data.get("totalCount")
+        has_more = len(items) >= page_size
+        if isinstance(total, int):
+            has_more = page * page_size < total
+        return ChargePage(items=items, has_more=has_more)
 
     def _extract_cookies(self, cross_domain_url: str, response: httpx.Response) -> dict[str, str]:
         cookies = {key: value for key, value in parse_qsl(urlsplit(cross_domain_url).query)}

@@ -18,6 +18,8 @@ python -m venv .venv
 
 登录后可调用 `POST /api/bili/qr-sessions` 获取二维码地址，并轮询 `GET /api/bili/qr-sessions/{id}`。浏览器只接触二维码和状态，B 站 Cookie 与 refresh token 由后端提取并使用 Fernet 加密保存。`GET /api/bili/accounts` 仅返回当前用户的账号元数据，不返回任何凭据。
 
+`POST /api/bili/accounts/{id}/collect` 会分页读取该账号的全部充电记录。服务优先使用上游订单标识生成稳定事件 ID，否则基于账号、用户、金额和时间生成摘要；数据库同时使用账号与事件 ID 唯一约束防止重复。每次执行都会保存页数、读取数、新增数、耗时和错误摘要，同一账号不会并发采集。
+
 ## Docker Compose
 
 复制 `.env.example` 为 `.env`，替换其中所有占位密码和密钥，然后运行：
