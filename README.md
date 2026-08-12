@@ -24,6 +24,8 @@ python -m venv .venv
 
 通知中心支持飞书机器人、Telegram Bot、Server酱和通用 Webhook。渠道凭据加密保存，页面/API 只返回掩码；事件先写入 outbox，再为每个订阅渠道独立投递，失败使用指数退避重试。通用 Webhook 仅允许 HTTP(S) 的 POST/PUT/PATCH，并在发送前拒绝本机、私网、链路本地和云元数据地址。
 
+登录后访问 `/dashboard` 查看今日、本月、累计、实际到账、平台差额、贡献者、趋势、最近记录与任务状态。`/api/dashboard` 支持账号、时间、昵称/UID 和金额过滤及分页，`/api/dashboard/export.csv` 导出当前租户记录。分享链接使用随机 Token、有效期、可选密码和昵称/UID 脱敏，数据库只保存 Token 摘要。
+
 ## Docker Compose
 
 复制 `.env.example` 为 `.env`，替换其中所有占位密码和密钥，然后运行：

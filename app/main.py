@@ -12,6 +12,7 @@ from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
 from app.routers.charges import router as charges_router
 from app.routers.coupons import router as coupons_router
+from app.routers.dashboard import router as dashboard_router
 from app.routers.jobs import router as jobs_router
 from app.routers.notifications import router as notifications_router
 from app.services.scheduler import SchedulerManager
@@ -29,6 +30,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         Path("data").mkdir(exist_ok=True)
     scheduler = SchedulerManager(get_session_factory(), settings.app_timezone)
     application.state.scheduler = scheduler
+    application.state.templates = templates
     scheduler.start()
     try:
         yield
@@ -48,6 +50,7 @@ def create_app() -> FastAPI:
     application.include_router(users_router)
     application.include_router(charges_router)
     application.include_router(coupons_router)
+    application.include_router(dashboard_router)
     application.include_router(jobs_router)
     application.include_router(notifications_router)
 
@@ -72,8 +75,10 @@ def create_app() -> FastAPI:
                 "monthly_coupon_claim",
                 "notification_plugins",
                 "reliable_notification_delivery",
+                "dashboard_and_csv_export",
+                "expiring_dashboard_shares",
             ],
-            "milestone": "M5",
+            "milestone": "M6",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
