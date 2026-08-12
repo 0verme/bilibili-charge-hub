@@ -1,0 +1,14 @@
+.git
+.env
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+data
+*.sqlite3
+*.db
+*.log
+bili_cookie*.txt
+bili_cookie*.json
