@@ -54,6 +54,21 @@ def create_app() -> FastAPI:
     application.include_router(jobs_router)
     application.include_router(notifications_router)
 
+    @application.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'"
+        )
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -78,7 +93,7 @@ def create_app() -> FastAPI:
                 "dashboard_and_csv_export",
                 "expiring_dashboard_shares",
             ],
-            "milestone": "M6",
+            "milestone": "M7",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
