@@ -1,6 +1,6 @@
 # Bilibili Charge Hub
 
-可开源、自托管的多用户 Bilibili 充电记录管理平台。项目正在按可运行里程碑建设，当前完成 M0：FastAPI、安全配置、测试和 Docker Compose 基线。
+可开源、自托管的多用户 Bilibili 充电记录管理平台。当前已具备安全配置、核心多租户数据模型、Alembic 迁移、管理员初始化和会话认证。
 
 ## 本地开发
 
@@ -13,6 +13,8 @@ python -m venv .venv
 ```
 
 访问 `http://localhost:8000`，健康检查位于 `/healthz`，OpenAPI 文档位于 `/docs`。
+
+首次启动后，通过 `POST /api/auth/setup` 提交至少 12 位、同时包含字母和数字的密码来创建唯一的初始管理员。后续管理员可通过 `/api/users` 创建其他系统用户；登录会话保存在 HttpOnly Cookie 中，数据库只保存会话 Token 的 SHA-256 摘要。
 
 ## Docker Compose
 

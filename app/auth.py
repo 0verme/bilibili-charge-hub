@@ -1,0 +1,42 @@
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import Cookie, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import User, UserRole, UserSession
+from app.security import hash_session_token
+
+DbSession = Annotated[Session, Depends(get_db)]
+SessionToken = Annotated[str | None, Cookie()]
+
+
+def get_current_user(db: DbSession, session_token: SessionToken = None) -> User:
+    if not session_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    session = db.scalar(
+        select(UserSession).where(UserSession.token_hash == hash_session_token(session_token))
+    )
+    now = datetime.now(UTC)
+    if session is None or session.expires_at.replace(tzinfo=UTC) <= now:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "session expired")
+    user = db.get(User, session.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "account disabled")
+    session.last_seen_at = now
+    db.commit()
+    return user
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_admin(user: CurrentUser) -> User:
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "administrator required")
+    return user
+
+
+AdminUser = Annotated[User, Depends(require_admin)]

@@ -17,4 +17,4 @@ def test_home_and_capabilities_are_available() -> None:
         response = client.get("/api/system/capabilities")
 
     assert response.status_code == 200
-    assert response.json()["milestone"] == "M0"
+    assert response.json()["milestone"] == "M1"

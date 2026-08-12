@@ -6,6 +6,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.routers.auth import router as auth_router
+from app.routers.auth import users_router
 from app.settings import get_settings
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,6 +30,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    application.include_router(auth_router)
+    application.include_router(users_router)
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -36,8 +40,14 @@ def create_app() -> FastAPI:
     @application.get("/api/system/capabilities", tags=["system"])
     def capabilities() -> dict[str, object]:
         return {
-            "implemented": ["health_check", "secure_configuration", "docker_runtime"],
-            "milestone": "M0",
+            "implemented": [
+                "health_check",
+                "secure_configuration",
+                "docker_runtime",
+                "multi_user_authentication",
+                "core_database_schema",
+            ],
+            "milestone": "M1",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
