@@ -16,6 +16,8 @@ python -m venv .venv
 
 首次启动后，通过 `POST /api/auth/setup` 提交至少 12 位、同时包含字母和数字的密码来创建唯一的初始管理员。后续管理员可通过 `/api/users` 创建其他系统用户；登录会话保存在 HttpOnly Cookie 中，数据库只保存会话 Token 的 SHA-256 摘要。
 
+登录后可调用 `POST /api/bili/qr-sessions` 获取二维码地址，并轮询 `GET /api/bili/qr-sessions/{id}`。浏览器只接触二维码和状态，B 站 Cookie 与 refresh token 由后端提取并使用 Fernet 加密保存。`GET /api/bili/accounts` 仅返回当前用户的账号元数据，不返回任何凭据。
+
 ## Docker Compose
 
 复制 `.env.example` 为 `.env`，替换其中所有占位密码和密钥，然后运行：

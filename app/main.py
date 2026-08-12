@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.routers.accounts import router as accounts_router
 from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
 from app.settings import get_settings
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    application.include_router(accounts_router)
     application.include_router(auth_router)
     application.include_router(users_router)
 
@@ -46,8 +48,10 @@ def create_app() -> FastAPI:
                 "docker_runtime",
                 "multi_user_authentication",
                 "core_database_schema",
+                "bilibili_qr_login",
+                "multi_bilibili_accounts",
             ],
-            "milestone": "M1",
+            "milestone": "M2",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
