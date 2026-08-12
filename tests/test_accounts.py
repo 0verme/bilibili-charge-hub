@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.bilibili.client import QrCode, QrPollResult, get_bilibili_client
 from app.database import get_db
 from app.main import create_app
-from app.models import Base, BiliAccount, QrLoginSession, User, UserRole
+from app.models import Base, BiliAccount, JobKind, QrLoginSession, ScheduleJob, User, UserRole
 from app.security import hash_password
 
 
@@ -94,6 +94,15 @@ def test_qr_login_encrypts_credentials_and_returns_only_metadata(
         assert stored is not None
         assert "test-session-secret" not in stored.encrypted_cookie
         assert "test-refresh-secret" not in (stored.encrypted_refresh_token or "")
+        jobs = list(db.scalars(select(ScheduleJob).where(ScheduleJob.bili_account_id == stored.id)))
+        assert {job.kind for job in jobs} == {
+            JobKind.CHARGE_COLLECTION,
+            JobKind.COUPON_CLAIM,
+        }
+        collection_job = next(job for job in jobs if job.kind == JobKind.CHARGE_COLLECTION)
+        coupon_job = next(job for job in jobs if job.kind == JobKind.COUPON_CLAIM)
+        assert collection_job.trigger_config == {"seconds": 60}
+        assert coupon_job.trigger_config == {"expression": "0 1 * * *"}
 
 
 def test_qr_sessions_and_accounts_are_tenant_isolated(

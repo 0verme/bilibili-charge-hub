@@ -1,14 +1,14 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession
 from app.bilibili.client import BilibiliApiError, BilibiliClient, get_bilibili_client
 from app.crypto import get_credential_cipher
-from app.models import AccountStatus, BiliAccount, QrLoginSession
+from app.models import AccountStatus, BiliAccount, JobKind, QrLoginSession, ScheduleJob
 
 router = APIRouter(prefix="/api/bili", tags=["bilibili"])
 BiliClientDep = Annotated[BilibiliClient, Depends(get_bilibili_client)]
@@ -78,6 +78,7 @@ async def create_qr_session(
 @router.get("/qr-sessions/{session_id}", response_model=QrSessionView)
 async def poll_qr_session(
     session_id: str,
+    request: Request,
     user: CurrentUser,
     db: DbSession,
     client: BiliClientDep,
@@ -128,6 +129,40 @@ async def poll_qr_session(
             )
             account.status = AccountStatus.ACTIVE
         db.flush()
+        existing_jobs = set(
+            db.scalars(
+                select(ScheduleJob.kind).where(
+                    ScheduleJob.user_id == user.id,
+                    ScheduleJob.bili_account_id == account.id,
+                )
+            )
+        )
+        defaults = []
+        if JobKind.CHARGE_COLLECTION not in existing_jobs:
+            defaults.append(
+                ScheduleJob(
+                    user_id=user.id,
+                    bili_account_id=account.id,
+                    kind=JobKind.CHARGE_COLLECTION,
+                    trigger_type="interval",
+                    trigger_config={"seconds": 60},
+                )
+            )
+        if JobKind.COUPON_CLAIM not in existing_jobs:
+            defaults.append(
+                ScheduleJob(
+                    user_id=user.id,
+                    bili_account_id=account.id,
+                    kind=JobKind.COUPON_CLAIM,
+                    trigger_type="cron",
+                    trigger_config={"expression": "0 1 * * *"},
+                )
+            )
+        db.add_all(defaults)
+        db.flush()
+        scheduler = request.app.state.scheduler
+        for job in defaults:
+            scheduler.sync_job(job)
         account_id = account.id
     db.commit()
     return QrSessionView(

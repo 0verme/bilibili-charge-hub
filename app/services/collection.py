@@ -90,15 +90,29 @@ class ChargeCollectionService:
     def __init__(self, client: BilibiliClient) -> None:
         self.client = client
 
-    async def collect(self, db: Session, account: BiliAccount) -> CollectionResult:
+    async def collect(
+        self,
+        db: Session,
+        account: BiliAccount,
+        schedule_job_id: str | None = None,
+    ) -> CollectionResult:
         lock = _account_locks.setdefault(account.id, asyncio.Lock())
         if lock.locked():
             raise CollectionBusyError("collection already running for this account")
         async with lock:
-            return await self._collect_locked(db, account)
+            return await self._collect_locked(db, account, schedule_job_id)
 
-    async def _collect_locked(self, db: Session, account: BiliAccount) -> CollectionResult:
-        run = JobRun(user_id=account.user_id, status=RunStatus.RUNNING)
+    async def _collect_locked(
+        self,
+        db: Session,
+        account: BiliAccount,
+        schedule_job_id: str | None,
+    ) -> CollectionResult:
+        run = JobRun(
+            user_id=account.user_id,
+            schedule_job_id=schedule_job_id,
+            status=RunStatus.RUNNING,
+        )
         db.add(run)
         db.commit()
         db.refresh(run)

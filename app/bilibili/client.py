@@ -6,6 +6,7 @@ import httpx
 GENERATE_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
 CHARGE_RECORDS_URL = "https://pay.bilibili.com/bk/brokerage/listForCustomerRechargeRecord"
+COUPON_CLAIM_URL = "https://api.bilibili.com/x/vip/privilege/receive"
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://www.bilibili.com",
@@ -49,6 +50,13 @@ class ChargePage:
 
 class BilibiliAuthenticationError(BilibiliApiError):
     pass
+
+
+@dataclass(slots=True)
+class CouponResult:
+    status: str
+    code: str
+    message: str
 
 
 class BilibiliClient:
@@ -116,6 +124,28 @@ class BilibiliClient:
         if isinstance(total, int):
             has_more = page * page_size < total
         return ChargePage(items=items, has_more=has_more)
+
+    async def claim_coupon(self, cookie_header: str, csrf: str) -> CouponResult:
+        response = await self._client.post(
+            COUPON_CLAIM_URL,
+            params={"type": 1, "csrf": csrf},
+            headers={"Cookie": cookie_header, "Referer": "https://account.bilibili.com/"},
+        )
+        response.raise_for_status()
+        body = response.json()
+        code = int(body.get("code", -1))
+        message = str(body.get("message") or body.get("msg") or "")[:500]
+        if code in {-101, -111}:
+            raise BilibiliAuthenticationError("Bilibili account authentication expired")
+        if code == 0:
+            state = "success"
+        elif "已领取" in message or "already" in message.lower():
+            state = "already_claimed"
+        elif any(word in message for word in ("不符合", "非大会员", "不可领取")):
+            state = "ineligible"
+        else:
+            state = "error"
+        return CouponResult(status=state, code=str(code), message=message)
 
     def _extract_cookies(self, cross_domain_url: str, response: httpx.Response) -> dict[str, str]:
         cookies = {key: value for key, value in parse_qsl(urlsplit(cross_domain_url).query)}

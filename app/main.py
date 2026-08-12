@@ -6,10 +6,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.database import get_session_factory
 from app.routers.accounts import router as accounts_router
 from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
 from app.routers.charges import router as charges_router
+from app.routers.coupons import router as coupons_router
+from app.routers.jobs import router as jobs_router
+from app.services.scheduler import SchedulerManager
 from app.settings import get_settings
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -17,12 +21,18 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     settings.validate_runtime_secrets()
     if settings.database_url.get_secret_value().startswith("sqlite"):
         Path("data").mkdir(exist_ok=True)
-    yield
+    scheduler = SchedulerManager(get_session_factory(), settings.app_timezone)
+    application.state.scheduler = scheduler
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -36,6 +46,8 @@ def create_app() -> FastAPI:
     application.include_router(auth_router)
     application.include_router(users_router)
     application.include_router(charges_router)
+    application.include_router(coupons_router)
+    application.include_router(jobs_router)
 
     @application.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str]:
@@ -54,8 +66,10 @@ def create_app() -> FastAPI:
                 "multi_bilibili_accounts",
                 "paginated_charge_collection",
                 "idempotent_charge_storage",
+                "persistent_scheduling",
+                "monthly_coupon_claim",
             ],
-            "milestone": "M3",
+            "milestone": "M4",
         }
 
     @application.get("/", response_class=HTMLResponse, include_in_schema=False)
