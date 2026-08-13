@@ -53,10 +53,10 @@ class JobKind(StrEnum):
     CHARGE_COLLECTION = "charge_collection"
     COUPON_CLAIM = "coupon_claim"
     NOTIFICATION_RETRY = "notification_retry"
-    COOKIE_CHECK = "cookie_check"
 
 
 class RunStatus(StrEnum):
+    QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -98,8 +98,8 @@ class BiliAccount(Base, TimestampMixin):
         SqlEnum(AccountStatus, native_enum=False), default=AccountStatus.ACTIVE
     )
     encrypted_cookie: Mapped[str] = mapped_column(Text)
-    encrypted_refresh_token: Mapped[str | None] = mapped_column(Text)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    collection_watermark_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class QrLoginSession(Base):
@@ -229,6 +229,10 @@ class NotificationDelivery(Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    error_type: Mapped[str | None] = mapped_column(String(64))
     response_summary: Mapped[str | None] = mapped_column(Text)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

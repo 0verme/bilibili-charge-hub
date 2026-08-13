@@ -106,6 +106,7 @@ def test_outbox_dedupes_and_channels_fail_independently(notification_db: Session
     assert event.attempts == 1
 
     event.available_at = event.created_at
+    by_channel[failing.id].available_at = event.created_at
     asyncio.run(service.deliver_event(notification_db, event))
     notification_db.refresh(by_channel[successful.id])
     notification_db.refresh(by_channel[failing.id])

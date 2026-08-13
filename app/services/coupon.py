@@ -7,8 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.bilibili.client import BilibiliAuthenticationError, BilibiliClient
 from app.crypto import get_credential_cipher
-from app.models import AccountStatus, BiliAccount, CouponClaim, JobRun, RunStatus
+from app.models import AccountStatus, BiliAccount, CouponClaim, JobRun, RunStatus, ScheduleJob
 from app.notifications.service import enqueue_event
+from app.settings import get_settings
 
 
 @dataclass(slots=True)
@@ -17,6 +18,14 @@ class CouponClaimOutcome:
     status: str
     message: str
     run_id: str
+
+
+def local_claim_month(now: datetime | None = None) -> str:
+    from zoneinfo import ZoneInfo
+
+    return (now or datetime.now(UTC)).astimezone(
+        ZoneInfo(get_settings().app_timezone)
+    ).strftime("%Y-%m")
 
 
 def extract_csrf(cookie_header: str) -> str:
@@ -37,20 +46,21 @@ class CouponClaimService:
         db: Session,
         account: BiliAccount,
         schedule_job_id: str | None = None,
+        run_id: str | None = None,
     ) -> CouponClaimOutcome:
-        month = datetime.now(UTC).strftime("%Y-%m")
+        month = local_claim_month()
         existing = db.scalar(
             select(CouponClaim).where(
                 CouponClaim.bili_account_id == account.id,
                 CouponClaim.claim_month == month,
             )
         )
-        run = JobRun(
-            user_id=account.user_id,
-            schedule_job_id=schedule_job_id,
-            status=RunStatus.RUNNING,
-        )
-        db.add(run)
+        run = db.get(JobRun, run_id) if run_id else None
+        if run is None:
+            run = JobRun(user_id=account.user_id, schedule_job_id=schedule_job_id)
+            db.add(run)
+        run.status = RunStatus.RUNNING
+        run.started_at = datetime.now(UTC)
         db.commit()
         db.refresh(run)
         started = datetime.now(UTC)
@@ -92,6 +102,11 @@ class CouponClaimService:
             return CouponClaimOutcome(claim.id, claim.status, claim.message, run.id)
         except BilibiliAuthenticationError:
             account.status = AccountStatus.EXPIRED
+            for job in db.scalars(
+                select(ScheduleJob).where(ScheduleJob.bili_account_id == account.id)
+            ):
+                job.enabled = False
+                job.next_run_at = None
             run.status = RunStatus.FAILED
             run.error = "Bilibili account authentication expired"
             enqueue_event(

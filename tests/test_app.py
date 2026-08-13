@@ -17,7 +17,7 @@ def test_home_and_capabilities_are_available() -> None:
         response = client.get("/api/system/capabilities")
 
     assert response.status_code == 200
-    assert response.json()["milestone"] == "M7"
+    assert response.json()["milestone"] == "M10-single-instance"
 
 
 def test_security_headers_and_api_cache_control() -> None:

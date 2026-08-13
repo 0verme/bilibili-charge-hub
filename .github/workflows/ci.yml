@@ -10,6 +10,18 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: charge_hub_ci
+          POSTGRES_USER: charge_hub
+          POSTGRES_PASSWORD: charge_hub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U charge_hub -d charge_hub_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,4 +32,7 @@ jobs:
       - run: ruff check .
       - run: pytest
       - run: DATABASE_URL=sqlite:///./ci.sqlite3 alembic upgrade head
+      - run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+psycopg://charge_hub:charge_hub_test@127.0.0.1:5432/charge_hub_ci
       - run: docker compose --env-file .env.example config --quiet

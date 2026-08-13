@@ -1,3 +1,5 @@
+import asyncio
+import random
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlsplit
 
@@ -25,6 +27,22 @@ COOKIE_KEYS = {
 
 
 class BilibiliApiError(RuntimeError):
+    pass
+
+
+class BilibiliRateLimited(BilibiliApiError):
+    pass
+
+
+class BilibiliUpstreamUnavailable(BilibiliApiError):
+    pass
+
+
+class BilibiliSchemaChanged(BilibiliApiError):
+    pass
+
+
+class BilibiliBusinessRejected(BilibiliApiError):
     pass
 
 
@@ -70,21 +88,59 @@ class BilibiliClient:
         if self._owns_client:
             await self._client.aclose()
 
+    async def _request_json(
+        self, method: str, url: str, **kwargs: object
+    ) -> tuple[httpx.Response, dict]:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.request(method, url, **kwargs)
+                if len(response.content) > 2_000_000:
+                    raise BilibiliSchemaChanged("Bilibili response is unexpectedly large")
+                if response.status_code == 429:
+                    if attempt == 2:
+                        raise BilibiliRateLimited("Bilibili rate limit reached")
+                    delay = min(float(response.headers.get("Retry-After", "1")), 10)
+                    await asyncio.sleep(delay + random.random() / 2)
+                    continue
+                if response.status_code >= 500:
+                    raise BilibiliUpstreamUnavailable(
+                        f"Bilibili upstream returned HTTP {response.status_code}"
+                    )
+                if response.status_code >= 400:
+                    raise BilibiliBusinessRejected(
+                        f"Bilibili rejected request with HTTP {response.status_code}"
+                    )
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise BilibiliSchemaChanged("Bilibili response is not valid JSON") from exc
+                if not isinstance(body, dict):
+                    raise BilibiliSchemaChanged("Bilibili response is not an object")
+                return response, body
+            except (httpx.TimeoutException, httpx.NetworkError, BilibiliUpstreamUnavailable) as exc:
+                last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep((2**attempt) + random.random() / 2)
+                    continue
+        raise BilibiliUpstreamUnavailable("Bilibili upstream unavailable") from last_error
+
     async def generate_qr(self) -> QrCode:
-        response = await self._client.get(GENERATE_URL)
-        response.raise_for_status()
-        body = response.json()
-        if body.get("code") != 0 or not body.get("data"):
+        _response, body = await self._request_json("GET", GENERATE_URL)
+        if body.get("code") != 0 or not isinstance(body.get("data"), dict):
             raise BilibiliApiError("Bilibili QR generation failed")
-        return QrCode(key=body["data"]["qrcode_key"], url=body["data"]["url"])
+        data = body["data"]
+        if not isinstance(data.get("qrcode_key"), str) or not isinstance(data.get("url"), str):
+            raise BilibiliSchemaChanged("Bilibili QR response fields changed")
+        return QrCode(key=data["qrcode_key"], url=data["url"])
 
     async def poll_qr(self, key: str) -> QrPollResult:
-        response = await self._client.get(POLL_URL, params={"qrcode_key": key})
-        response.raise_for_status()
-        body = response.json()
+        response, body = await self._request_json("GET", POLL_URL, params={"qrcode_key": key})
         if body.get("code") != 0:
             raise BilibiliApiError("Bilibili QR polling failed")
         data = body.get("data") or {}
+        if not isinstance(data, dict):
+            raise BilibiliSchemaChanged("Bilibili QR polling data changed")
         code = data.get("code")
         states = {86101: "pending", 86090: "scanned", 86038: "expired"}
         if code != 0:
@@ -106,19 +162,22 @@ class BilibiliClient:
         page: int,
         page_size: int = 50,
     ) -> ChargePage:
-        response = await self._client.get(
+        _response, body = await self._request_json(
+            "GET",
             CHARGE_RECORDS_URL,
             params={"currentPage": page, "pageSize": page_size, "customerId": "10026"},
             headers={"Cookie": cookie_header, "Referer": "https://pay.bilibili.com/"},
         )
-        response.raise_for_status()
-        body = response.json()
         if body.get("code") in {-101, -111, -400, 61000}:
             raise BilibiliAuthenticationError("Bilibili account authentication expired")
-        data = body.get("data") or {}
+        data = body.get("data")
+        if not isinstance(data, dict) or "result" not in data:
+            raise BilibiliSchemaChanged("Bilibili charge response fields changed")
         items = data.get("result") or []
         if not isinstance(items, list):
-            raise BilibiliApiError("unexpected charge record response")
+            raise BilibiliSchemaChanged("Bilibili charge records are not a list")
+        if any(not isinstance(item, dict) for item in items):
+            raise BilibiliSchemaChanged("Bilibili charge record item is not an object")
         total = data.get("total") or data.get("totalCount")
         has_more = len(items) >= page_size
         if isinstance(total, int):
@@ -126,13 +185,12 @@ class BilibiliClient:
         return ChargePage(items=items, has_more=has_more)
 
     async def claim_coupon(self, cookie_header: str, csrf: str) -> CouponResult:
-        response = await self._client.post(
+        _response, body = await self._request_json(
+            "POST",
             COUPON_CLAIM_URL,
             params={"type": 1, "csrf": csrf},
             headers={"Cookie": cookie_header, "Referer": "https://account.bilibili.com/"},
         )
-        response.raise_for_status()
-        body = response.json()
         code = int(body.get("code", -1))
         message = str(body.get("message") or body.get("msg") or "")[:500]
         if code in {-101, -111}:

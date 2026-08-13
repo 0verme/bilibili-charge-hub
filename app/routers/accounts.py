@@ -1,14 +1,18 @@
+import io
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession
 from app.bilibili.client import BilibiliApiError, BilibiliClient, get_bilibili_client
 from app.crypto import get_credential_cipher
 from app.models import AccountStatus, BiliAccount, JobKind, QrLoginSession, ScheduleJob
+from app.settings import get_settings
 
 router = APIRouter(prefix="/api/bili", tags=["bilibili"])
 BiliClientDep = Annotated[BilibiliClient, Depends(get_bilibili_client)]
@@ -117,16 +121,10 @@ async def poll_qr_session(
                 user_id=user.id,
                 bili_uid=bili_uid,
                 encrypted_cookie=cipher.encrypt(cookie_string),
-                encrypted_refresh_token=(
-                    cipher.encrypt(result.refresh_token) if result.refresh_token else None
-                ),
             )
             db.add(account)
         else:
             account.encrypted_cookie = cipher.encrypt(cookie_string)
-            account.encrypted_refresh_token = (
-                cipher.encrypt(result.refresh_token) if result.refresh_token else None
-            )
             account.status = AccountStatus.ACTIVE
         db.flush()
         existing_jobs = set(
@@ -145,7 +143,7 @@ async def poll_qr_session(
                     bili_account_id=account.id,
                     kind=JobKind.CHARGE_COLLECTION,
                     trigger_type="interval",
-                    trigger_config={"seconds": 60},
+                    trigger_config={"seconds": get_settings().collection_interval_seconds},
                 )
             )
         if JobKind.COUPON_CLAIM not in existing_jobs:
@@ -162,7 +160,7 @@ async def poll_qr_session(
         db.flush()
         scheduler = request.app.state.scheduler
         for job in defaults:
-            scheduler.sync_job(job)
+            scheduler.sync_job(job, db)
         account_id = account.id
     db.commit()
     return QrSessionView(
@@ -171,6 +169,16 @@ async def poll_qr_session(
         expires_at=qr_session.expires_at,
         account_id=account_id,
     )
+
+
+@router.get("/qr-sessions/{session_id}/image", response_class=Response)
+def qr_session_image(session_id: str, user: CurrentUser, db: DbSession) -> Response:
+    qr_session = get_tenant_qr(db, user.id, session_id)
+    image = qrcode.make(qr_session.qr_url)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    return Response(stream.getvalue(), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/accounts", response_model=list[BiliAccountView])
@@ -185,7 +193,7 @@ def list_accounts(user: CurrentUser, db: DbSession) -> list[BiliAccount]:
 
 
 @router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-def unbind_account(account_id: str, user: CurrentUser, db: DbSession) -> None:
+def unbind_account(account_id: str, request: Request, user: CurrentUser, db: DbSession) -> None:
     account = db.scalar(
         select(BiliAccount).where(
             BiliAccount.id == account_id,
@@ -194,5 +202,26 @@ def unbind_account(account_id: str, user: CurrentUser, db: DbSession) -> None:
     )
     if account is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Bilibili account not found")
+    jobs = list(db.scalars(select(ScheduleJob).where(ScheduleJob.bili_account_id == account.id)))
+    for job in jobs:
+        request.app.state.scheduler.remove_job(job.id)
     db.delete(account)
     db.commit()
+
+
+class AccountUpdate(BaseModel):
+    display_name: str = Field(min_length=1, max_length=128)
+
+
+@router.patch("/accounts/{account_id}", response_model=BiliAccountView)
+def update_account(
+    account_id: str, payload: AccountUpdate, user: CurrentUser, db: DbSession
+) -> BiliAccount:
+    account = db.scalar(
+        select(BiliAccount).where(BiliAccount.id == account_id, BiliAccount.user_id == user.id)
+    )
+    if account is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bilibili account not found")
+    account.display_name = payload.display_name.strip()
+    db.commit()
+    return account

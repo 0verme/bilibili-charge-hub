@@ -1,11 +1,18 @@
 import asyncio
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.bilibili.client import BilibiliAuthenticationError, ChargePage
+from app.bilibili.client import (
+    CHARGE_RECORDS_URL,
+    BilibiliAuthenticationError,
+    BilibiliClient,
+    BilibiliSchemaChanged,
+    ChargePage,
+)
 from app.crypto import get_credential_cipher
 from app.models import (
     AccountStatus,
@@ -132,3 +139,18 @@ def test_event_id_prefers_source_id_and_has_stable_fallback() -> None:
         "ctime": datetime(2026, 8, 12, tzinfo=UTC).isoformat(),
     }
     assert stable_event_id("account", item) == stable_event_id("account", dict(item))
+
+
+def test_bilibili_client_rejects_changed_charge_schema() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).startswith(CHARGE_RECORDS_URL)
+        return httpx.Response(200, json={"code": 0, "data": {"unexpected": []}})
+
+    async def exercise() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as raw:
+            client = BilibiliClient(raw)
+            with pytest.raises(BilibiliSchemaChanged):
+                await client.fetch_charge_page("SESSDATA=masked", 1)
+
+    asyncio.run(exercise())

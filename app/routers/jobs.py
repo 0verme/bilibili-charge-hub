@@ -1,4 +1,5 @@
-from datetime import datetime
+import asyncio
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -6,16 +7,17 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
 from app.auth import CurrentUser, DbSession
-from app.models import BiliAccount, JobKind, ScheduleJob
+from app.models import BiliAccount, JobKind, JobRun, RunStatus, ScheduleJob
 from app.services.scheduler import SchedulerManager
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+runs_router = APIRouter(prefix="/api/job-runs", tags=["job-runs"])
 
 
 class JobInput(BaseModel):
     bili_account_id: str | None = None
     kind: JobKind
-    interval_seconds: int | None = Field(default=None, ge=10)
+    interval_seconds: int | None = Field(default=None, ge=60)
     cron: str | None = None
     enabled: bool = True
 
@@ -23,7 +25,7 @@ class JobInput(BaseModel):
     def exactly_one_trigger(self) -> "JobInput":
         if (self.interval_seconds is None) == (self.cron is None):
             raise ValueError("provide exactly one of interval_seconds or cron")
-        account_kinds = {JobKind.CHARGE_COLLECTION, JobKind.COUPON_CLAIM, JobKind.COOKIE_CHECK}
+        account_kinds = {JobKind.CHARGE_COLLECTION, JobKind.COUPON_CLAIM}
         if self.kind in account_kinds and self.bili_account_id is None:
             raise ValueError("this job kind requires bili_account_id")
         return self
@@ -42,7 +44,7 @@ class JobView(BaseModel):
 
 
 class ScheduleUpdate(BaseModel):
-    interval_seconds: int | None = Field(default=None, ge=10)
+    interval_seconds: int | None = Field(default=None, ge=60)
     cron: str | None = None
 
     @model_validator(mode="after")
@@ -170,6 +172,7 @@ def update_job_schedule(
 @router.post("/{job_id}/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_job_now(
     job_id: str,
+    request: Request,
     user: CurrentUser,
     db: DbSession,
     scheduler: SchedulerDep,
@@ -179,5 +182,67 @@ async def run_job_now(
     )
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    await scheduler.dispatch(job_id)
-    return {"status": "completed"}
+    stored_job = db.get(ScheduleJob, job_id)
+    assert stored_job is not None
+    run = JobRun(
+        user_id=user.id,
+        schedule_job_id=job_id,
+        status=RunStatus.QUEUED,
+        started_at=datetime.now(UTC),
+    )
+    db.add(run)
+    db.commit()
+    task = asyncio.create_task(scheduler.dispatch(job_id, run.id))
+    tasks: set[asyncio.Task] = request.app.state.background_tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+    return {"status": "queued", "run_id": run.id}
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(
+    job_id: str, user: CurrentUser, db: DbSession, scheduler: SchedulerDep
+) -> None:
+    job = db.scalar(
+        select(ScheduleJob).where(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id)
+    )
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    scheduler.remove_job(job.id)
+    db.delete(job)
+    db.commit()
+
+
+class JobRunView(BaseModel):
+    id: str
+    schedule_job_id: str | None
+    status: RunStatus
+    started_at: datetime
+    finished_at: datetime | None
+    duration_ms: int | None
+    result: dict
+    error: str | None
+
+    model_config = {"from_attributes": True}
+
+
+@runs_router.get("", response_model=list[JobRunView])
+def list_job_runs(user: CurrentUser, db: DbSession, limit: int = 100) -> list[JobRun]:
+    return list(
+        db.scalars(
+            select(JobRun)
+            .where(JobRun.user_id == user.id)
+            .order_by(JobRun.started_at.desc())
+            .limit(min(max(limit, 1), 200))
+        )
+    )
+
+
+@runs_router.get("/{run_id}", response_model=JobRunView)
+def get_job_run(run_id: str, user: CurrentUser, db: DbSession) -> JobRun:
+    run = db.scalar(
+        select(JobRun).where(JobRun.id == run_id, JobRun.user_id == user.id)
+    )
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "job run not found")
+    return run

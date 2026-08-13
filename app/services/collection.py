@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -14,7 +13,7 @@ from app.bilibili.client import (
     BilibiliClient,
 )
 from app.crypto import get_credential_cipher
-from app.models import AccountStatus, BiliAccount, ChargeRecord, JobRun, RunStatus
+from app.models import AccountStatus, BiliAccount, ChargeRecord, JobRun, RunStatus, ScheduleJob
 from app.notifications.service import enqueue_event
 
 PAGE_SIZE = 50
@@ -72,6 +71,14 @@ def parse_decimal(value: object) -> Decimal:
 
 
 def build_charge_record(account: BiliAccount, item: dict) -> ChargeRecord:
+    allowed = {
+        "id", "orderNo", "tradeNo", "mid", "uid", "name", "nickname", "avatar",
+        "originalThirdCoin", "amount", "brokerage", "remark", "ctime", "charge_time",
+    }
+    raw_data = {
+        "schema_version": 1,
+        **{key: str(item[key])[:1000] for key in allowed if key in item},
+    }
     return ChargeRecord(
         user_id=account.user_id,
         bili_account_id=account.id,
@@ -83,7 +90,7 @@ def build_charge_record(account: BiliAccount, item: dict) -> ChargeRecord:
         brokerage=parse_decimal(item.get("brokerage", 0)),
         remark=str(item.get("remark", "")),
         charged_at=parse_charge_time(item.get("ctime", item.get("charge_time"))),
-        raw_data=json.loads(json.dumps(item, ensure_ascii=False, default=str)),
+        raw_data=raw_data,
     )
 
 
@@ -96,37 +103,47 @@ class ChargeCollectionService:
         db: Session,
         account: BiliAccount,
         schedule_job_id: str | None = None,
+        run_id: str | None = None,
     ) -> CollectionResult:
         lock = _account_locks.setdefault(account.id, asyncio.Lock())
         if lock.locked():
             raise CollectionBusyError("collection already running for this account")
         async with lock:
-            return await self._collect_locked(db, account, schedule_job_id)
+            return await self._collect_locked(db, account, schedule_job_id, run_id)
 
     async def _collect_locked(
         self,
         db: Session,
         account: BiliAccount,
         schedule_job_id: str | None,
+        run_id: str | None,
     ) -> CollectionResult:
-        run = JobRun(
-            user_id=account.user_id,
-            schedule_job_id=schedule_job_id,
-            status=RunStatus.RUNNING,
-        )
-        db.add(run)
+        run = db.get(JobRun, run_id) if run_id else None
+        if run is None:
+            run = JobRun(user_id=account.user_id, schedule_job_id=schedule_job_id)
+            db.add(run)
+        run.status = RunStatus.RUNNING
+        run.started_at = datetime.now(UTC)
         db.commit()
         db.refresh(run)
         started = datetime.now(UTC)
         pages = seen = inserted = 0
         try:
             cookie = get_credential_cipher().decrypt(account.encrypted_cookie)
+            watermark = account.collection_watermark_at
+            newest_seen = watermark
+            consecutive_known_pages = 0
             for page_number in range(1, MAX_PAGES + 1):
                 page = await self.client.fetch_charge_page(cookie, page_number, PAGE_SIZE)
                 pages += 1
+                page_inserted = 0
+                page_times: list[datetime] = []
                 for item in page.items:
                     seen += 1
                     record = build_charge_record(account, item)
+                    page_times.append(record.charged_at)
+                    if newest_seen is None or record.charged_at > newest_seen:
+                        newest_seen = record.charged_at
                     exists = db.scalar(
                         select(ChargeRecord.id).where(
                             ChargeRecord.bili_account_id == account.id,
@@ -151,16 +168,27 @@ class ChargeCollectionService:
                                 },
                             )
                         inserted += 1
+                        page_inserted += 1
                     except IntegrityError:
                         pass
-                if not page.has_more:
+                if page_inserted == 0 and watermark and page_times and max(page_times) <= watermark:
+                    consecutive_known_pages += 1
+                else:
+                    consecutive_known_pages = 0
+                if not page.has_more or consecutive_known_pages >= 2:
                     break
             account.last_checked_at = datetime.now(UTC)
+            account.collection_watermark_at = newest_seen
             run.status = RunStatus.SUCCEEDED
             run.result = {"pages": pages, "seen": seen, "inserted": inserted}
             return CollectionResult(run.id, pages, seen, inserted)
         except BilibiliAuthenticationError:
             account.status = AccountStatus.EXPIRED
+            for job in db.scalars(
+                select(ScheduleJob).where(ScheduleJob.bili_account_id == account.id)
+            ):
+                job.enabled = False
+                job.next_run_at = None
             run.status = RunStatus.FAILED
             run.error = "Bilibili account authentication expired"
             enqueue_event(

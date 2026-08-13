@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("sqlite:///./data/bilibili-charge-hub.sqlite3")
     app_secret_key: SecretStr = SecretStr("development-only-change-me")
     credential_encryption_key: SecretStr | None = None
+    collection_interval_seconds: int = Field(default=300, ge=60)
+    retention_days: int = Field(default=90, ge=7)
 
     @field_validator("app_timezone")
     @classmethod

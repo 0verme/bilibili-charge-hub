@@ -26,3 +26,20 @@ class UserView(BaseModel):
     is_active: bool
 
     model_config = {"from_attributes": True}
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+    _validate_new = field_validator("new_password")(Credentials.require_password_variety.__func__)
+
+
+class PasswordReset(BaseModel):
+    new_password: str = Field(min_length=12, max_length=128)
+
+    _validate_new = field_validator("new_password")(Credentials.require_password_variety.__func__)
+
+
+class UserUpdate(BaseModel):
+    is_active: bool

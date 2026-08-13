@@ -3,10 +3,11 @@ from sqlalchemy import func, select
 
 from app.auth import AdminUser, CurrentUser, DbSession, SessionToken
 from app.models import User, UserRole, UserSession
-from app.schemas import Credentials, UserCreate, UserView
+from app.schemas import Credentials, PasswordChange, PasswordReset, UserCreate, UserUpdate, UserView
 from app.security import (
     hash_password,
     hash_session_token,
+    new_csrf_token,
     new_session_token,
     session_expiry,
     verify_password,
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 users_router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-def set_session_cookie(response: Response, token: str) -> None:
+def set_session_cookie(response: Response, token: str, csrf_token: str) -> None:
     response.set_cookie(
         "session_token",
         token,
@@ -25,6 +26,13 @@ def set_session_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=get_settings().app_env == "production",
         samesite="lax",
+    )
+    response.set_cookie(
+        "csrf_token",
+        csrf_token,
+        max_age=7 * 24 * 60 * 60,
+        secure=get_settings().app_env == "production",
+        samesite="strict",
     )
 
 
@@ -39,7 +47,7 @@ def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User
     )
     db.add(user)
     db.flush()
-    token = new_session_token()
+    token, csrf_token = new_session_token(), new_csrf_token()
     db.add(
         UserSession(
             user_id=user.id,
@@ -48,7 +56,7 @@ def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User
         )
     )
     db.commit()
-    set_session_cookie(response, token)
+    set_session_cookie(response, token, csrf_token)
     return user
 
 
@@ -61,7 +69,7 @@ def login(payload: Credentials, response: Response, db: DbSession) -> User:
         or not verify_password(payload.password, user.password_hash)
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
-    token = new_session_token()
+    token, csrf_token = new_session_token(), new_csrf_token()
     db.add(
         UserSession(
             user_id=user.id,
@@ -70,7 +78,7 @@ def login(payload: Credentials, response: Response, db: DbSession) -> User:
         )
     )
     db.commit()
-    set_session_cookie(response, token)
+    set_session_cookie(response, token, csrf_token)
     return user
 
 
@@ -88,11 +96,30 @@ def logout(
             db.delete(stored)
             db.commit()
     response.delete_cookie("session_token")
+    response.delete_cookie("csrf_token")
 
 
 @router.get("/me", response_model=UserView)
 def me(user: CurrentUser) -> User:
     return user
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    payload: PasswordChange,
+    user: CurrentUser,
+    db: DbSession,
+    session_token: SessionToken = None,
+) -> None:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "current password is incorrect")
+    user.password_hash = hash_password(payload.new_password)
+    current_hash = hash_session_token(session_token) if session_token else ""
+    sessions = db.scalars(select(UserSession).where(UserSession.user_id == user.id)).all()
+    for stored in sessions:
+        if stored.token_hash != current_hash:
+            db.delete(stored)
+    db.commit()
 
 
 @users_router.post("", response_model=UserView, status_code=status.HTTP_201_CREATED)
@@ -120,3 +147,32 @@ def list_users(
     db: DbSession,
 ) -> list[User]:
     return list(db.scalars(select(User).order_by(User.created_at)).all())
+
+
+def get_user_or_404(db: DbSession, user_id: str) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    return user
+
+
+@users_router.patch("/{user_id}", response_model=UserView)
+def update_user(user_id: str, payload: UserUpdate, admin: AdminUser, db: DbSession) -> User:
+    target = get_user_or_404(db, user_id)
+    if target.id == admin.id and payload.is_active is False:
+        raise HTTPException(status.HTTP_409_CONFLICT, "cannot disable current administrator")
+    target.is_active = payload.is_active
+    if not payload.is_active:
+        for stored in db.scalars(select(UserSession).where(UserSession.user_id == target.id)):
+            db.delete(stored)
+    db.commit()
+    return target
+
+
+@users_router.post("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(user_id: str, payload: PasswordReset, _: AdminUser, db: DbSession) -> None:
+    target = get_user_or_404(db, user_id)
+    target.password_hash = hash_password(payload.new_password)
+    for stored in db.scalars(select(UserSession).where(UserSession.user_id == target.id)):
+        db.delete(stored)
+    db.commit()

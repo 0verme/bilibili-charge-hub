@@ -93,7 +93,7 @@ def test_qr_login_encrypts_credentials_and_returns_only_metadata(
         stored = db.scalar(select(BiliAccount))
         assert stored is not None
         assert "test-session-secret" not in stored.encrypted_cookie
-        assert "test-refresh-secret" not in (stored.encrypted_refresh_token or "")
+        assert not hasattr(stored, "encrypted_refresh_token")
         jobs = list(db.scalars(select(ScheduleJob).where(ScheduleJob.bili_account_id == stored.id)))
         assert {job.kind for job in jobs} == {
             JobKind.CHARGE_COLLECTION,
@@ -101,7 +101,8 @@ def test_qr_login_encrypts_credentials_and_returns_only_metadata(
         }
         collection_job = next(job for job in jobs if job.kind == JobKind.CHARGE_COLLECTION)
         coupon_job = next(job for job in jobs if job.kind == JobKind.COUPON_CLAIM)
-        assert collection_job.trigger_config == {"seconds": 60}
+        assert collection_job.trigger_config == {"seconds": 300}
+        assert collection_job.next_run_at is not None
         assert coupon_job.trigger_config == {"expression": "0 1 * * *"}
 
 

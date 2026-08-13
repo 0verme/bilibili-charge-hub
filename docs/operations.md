@@ -5,7 +5,7 @@
 1. 复制 `.env.example` 为 `.env`。
 2. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
 3. 运行 `docker compose up -d`。应用容器启动时自动执行 `alembic upgrade head`。
-4. 打开 `http://服务器地址:8000`，通过 `POST /api/auth/setup` 初始化唯一的首位管理员，再登录管理后台。
+4. 打开 `http://服务器地址:8000/login`，选择“首次初始化管理员”，然后进入管理后台。
 
 生产环境应在反向代理后启用 HTTPS；会话 Cookie 在 `APP_ENV=production` 时带 `Secure`、`HttpOnly` 与 `SameSite=Lax`。
 
@@ -30,15 +30,15 @@ docker compose exec -T db pg_restore -U bilibili -d bilibili_charge_hub --clean 
 1. 先备份数据库和当前 `.env`。
 2. 获取新版本代码并阅读发布说明。
 3. 执行 `docker compose build --pull` 和 `docker compose up -d`。
-4. 检查 `/healthz`、容器日志和最近任务状态。迁移由应用启动命令执行；发生错误时不要跳过迁移或修改版本表。
+4. 检查 `/healthz`、`/readyz`、容器日志和最近任务状态。迁移由应用启动命令执行；发生错误时不要跳过迁移或修改版本表。
 
 ## 安全说明
 
-- 真实 Cookie、refresh token 和通知凭据均使用 Fernet 加密存储，API 和页面只返回元数据或掩码。
+- 真实 Cookie 和通知凭据使用 Fernet 加密存储，API 和页面只返回元数据或掩码；当前不保存 refresh token。
 - 系统用户只能查询带自身 `user_id` 的账号、记录、任务、渠道与券领取数据；管理员也不会获得其他用户明文凭据。
 - 通用 Webhook 禁止非 HTTP(S) 协议、危险方法/请求头、本机、私网、链路本地和云元数据目标，并在发送前复核 DNS 解析结果。
-- 分享链接只读，Token 随机生成且数据库仅存摘要；可设置有效期、密码和昵称/UID 脱敏。
-- Bilibili Web 接口并非稳定的官方开放 API，可能变化、限流或触发风控。默认采集周期为 60 秒，最低 10 秒；不要无限重试。
+- 分享链接只读，Token 随机生成且数据库仅存摘要；密码通过 POST 换取短期 HttpOnly 访问 Cookie。
+- Bilibili Web 接口并非稳定的官方开放 API，可能变化、限流或触发风控。默认采集周期为 5 分钟；客户端只对 429、5xx 和网络错误做有限退避重试。
 - 系统只检查并领取会员 B 币券，不会自动消费或自动为 UP 主充电。
 
 ## 故障排查
@@ -47,3 +47,9 @@ docker compose exec -T db pg_restore -U bilibili -d bilibili_charge_hub --clean 
 - 任务不运行：确认任务已启用、时区为 `Asia/Shanghai`，并检查 `job_runs` 的错误摘要。
 - 通知失败：查看 `notification_deliveries` 的状态和脱敏响应摘要；不要把完整 Token 打入日志。
 - Docker Hub 拉取失败：检查宿主机代理、DNS 和 Docker Desktop 网络后重试构建。
+
+## 部署限制与保留策略
+
+- 当前只支持单 app 副本、单 Uvicorn worker；不要横向扩容。
+- `RETENTION_DAYS` 默认 90 天，用于清理已完成通知、任务运行记录和过期会话；充电记录不会被自动清理。
+- 每次升级前执行备份并验证 `/readyz`。建议定期进行恢复演练，而不只检查备份文件是否存在。

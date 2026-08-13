@@ -122,6 +122,9 @@ class NotificationDeliveryService:
             if delivery and delivery.status == "succeeded":
                 successes += 1
                 continue
+            if delivery and delivery.available_at.replace(tzinfo=UTC) > datetime.now(UTC):
+                failures += 1
+                continue
             delivery = delivery or NotificationDelivery(
                 user_id=event.user_id,
                 outbox_id=event.id,
@@ -135,14 +138,19 @@ class NotificationDeliveryService:
                 result = await provider.send(render_message(event), config)
                 delivery.status = "succeeded" if result.success else "failed"
                 delivery.response_summary = result.detail[:500]
+                delivery.error_type = None if result.success else "provider_rejected"
             except Exception as exc:
                 delivery.status = "failed"
+                delivery.error_type = type(exc).__name__[:64]
                 delivery.response_summary = f"{type(exc).__name__}: {str(exc)[:300]}"
             if delivery.status == "succeeded":
                 delivery.delivered_at = datetime.now(UTC)
                 successes += 1
             else:
                 failures += 1
+                delivery.available_at = datetime.now(UTC) + timedelta(
+                    seconds=2**delivery.attempts * 30
+                )
         event.attempts += 1
         if not subscriptions or failures == 0:
             event.status = "delivered"

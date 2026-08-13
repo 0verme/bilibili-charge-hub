@@ -6,6 +6,7 @@ services:
       - path: .env
         required: false
     environment:
+      APP_ENV: production
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-bilibili}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-bilibili_charge_hub}
     ports:
       - "${APP_PORT:-8000}:8000"
@@ -13,7 +14,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3

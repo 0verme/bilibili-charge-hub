@@ -1,10 +1,13 @@
 import csv
+import hashlib
+import hmac
 import io
 import secrets
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -12,8 +15,19 @@ from sqlalchemy import func, select
 from app.auth import CurrentUser, DbSession
 from app.models import BiliAccount, ChargeRecord, DashboardShare, JobRun
 from app.security import hash_password, hash_session_token, verify_password
+from app.settings import get_settings
 
 router = APIRouter(tags=["dashboard"])
+
+
+def local_period_boundaries(now: datetime | None = None) -> tuple[datetime, datetime]:
+    timezone = ZoneInfo(get_settings().app_timezone)
+    local_now = (now or datetime.now(UTC)).astimezone(timezone)
+    today = datetime.combine(local_now.date(), time.min, tzinfo=timezone).astimezone(UTC)
+    month = datetime.combine(
+        local_now.date().replace(day=1), time.min, tzinfo=timezone
+    ).astimezone(UTC)
+    return today, month
 
 
 class DashboardFilters(BaseModel):
@@ -68,8 +82,7 @@ def dashboard_payload(
     mask_uids: bool = False,
 ) -> dict:
     base = charge_query(user_id, filters).subquery()
-    today = datetime.combine(date.today(), datetime.min.time(), tzinfo=UTC)
-    month = today.replace(day=1)
+    today, month = local_period_boundaries()
     totals = db.execute(
         select(
             func.coalesce(func.sum(base.c.amount), 0),
@@ -155,7 +168,7 @@ def dashboard_payload(
 
 
 @router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
-def dashboard_page(request: Request, user: CurrentUser) -> HTMLResponse:
+def dashboard_page(request: Request) -> HTMLResponse:
     return request.app.state.templates.TemplateResponse(
         request=request, name="dashboard.html", context={"shared": False}
     )
@@ -186,29 +199,37 @@ def dashboard_api(
 
 
 @router.get("/api/dashboard/export.csv")
-def export_csv(user: CurrentUser, db: DbSession) -> StreamingResponse:
-    records = db.scalars(
-        select(ChargeRecord)
-        .where(ChargeRecord.user_id == user.id)
-        .order_by(ChargeRecord.charged_at.desc())
+def export_csv(
+    user: CurrentUser,
+    db: DbSession,
+    account_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    search: str | None = None,
+    min_amount: Decimal | None = None,
+    max_amount: Decimal | None = None,
+) -> StreamingResponse:
+    filters = DashboardFilters(
+        account_id=account_id, start=start, end=end, search=search,
+        min_amount=min_amount, max_amount=max_amount,
     )
-    stream = io.StringIO()
-    stream.write("\ufeff")
-    writer = csv.writer(stream)
-    writer.writerow(["UID", "昵称", "充电金额", "实际到账", "充电时间", "备注"])
-    for item in records:
-        writer.writerow(
-            [
-                item.supporter_uid,
-                item.supporter_name,
-                item.amount,
-                item.brokerage,
-                item.charged_at.isoformat(),
-                item.remark,
-            ]
-        )
+
+    def generate():
+        stream = io.StringIO()
+        stream.write("\ufeff")
+        writer = csv.writer(stream)
+        writer.writerow(["UID", "昵称", "充电金额", "实际到账", "充电时间", "备注"])
+        yield stream.getvalue()
+        query = charge_query(user.id, filters).order_by(ChargeRecord.charged_at.desc())
+        for item in db.scalars(query):
+            stream.seek(0)
+            stream.truncate(0)
+            writer.writerow([item.supporter_uid, item.supporter_name, item.amount,
+                             item.brokerage, item.charged_at.isoformat(), item.remark])
+            yield stream.getvalue()
+
     return StreamingResponse(
-        iter([stream.getvalue()]),
+        generate(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=charge-records.csv"},
     )
@@ -230,20 +251,84 @@ def create_share(payload: ShareInput, user: CurrentUser, db: DbSession) -> dict[
     return {"token": token, "path": f"/share/{token}"}
 
 
-def get_share(db: DbSession, token: str, password: str | None) -> DashboardShare:
+class ShareView(BaseModel):
+    id: str
+    expires_at: datetime
+    mask_names: bool
+    mask_uids: bool
+    password_protected: bool
+
+
+@router.get("/api/dashboard/shares", response_model=list[ShareView])
+def list_shares(user: CurrentUser, db: DbSession) -> list[ShareView]:
+    shares = db.scalars(
+        select(DashboardShare).where(DashboardShare.user_id == user.id)
+        .order_by(DashboardShare.created_at.desc())
+    )
+    return [ShareView(id=item.id, expires_at=item.expires_at, mask_names=item.mask_names,
+                      mask_uids=item.mask_uids,
+                      password_protected=item.password_hash is not None) for item in shares]
+
+
+@router.delete("/api/dashboard/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_share(share_id: str, user: CurrentUser, db: DbSession) -> None:
+    share = db.scalar(select(DashboardShare).where(
+        DashboardShare.id == share_id, DashboardShare.user_id == user.id
+    ))
+    if share is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "share not found")
+    db.delete(share)
+    db.commit()
+
+
+def get_share(db: DbSession, token: str) -> DashboardShare:
     share = db.scalar(
         select(DashboardShare).where(DashboardShare.token_hash == hash_session_token(token))
     )
     if share is None or share.expires_at.replace(tzinfo=UTC) <= datetime.now(UTC):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "share not found")
-    if share.password_hash and (not password or not verify_password(password, share.password_hash)):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "share password required")
     return share
 
 
+def share_cookie_name(token: str) -> str:
+    return "share_access_" + hash_session_token(token)[:12]
+
+
+def share_access_signature(token: str) -> str:
+    key = get_settings().app_secret_key.get_secret_value().encode()
+    return hmac.new(key, f"share|{token}".encode(), hashlib.sha256).hexdigest()
+
+
+class ShareUnlock(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
+@router.get("/share/{token}", response_class=HTMLResponse, include_in_schema=False)
+def share_page(token: str, request: Request, db: DbSession) -> HTMLResponse:
+    share = get_share(db, token)
+    return request.app.state.templates.TemplateResponse(
+        request=request, name="share.html",
+        context={"token": token, "password_required": share.password_hash is not None},
+    )
+
+
+@router.post("/api/share/{token}/unlock", status_code=status.HTTP_204_NO_CONTENT)
+def unlock_share(token: str, payload: ShareUnlock, response: Response, db: DbSession) -> None:
+    share = get_share(db, token)
+    if share.password_hash and not verify_password(payload.password, share.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "incorrect share password")
+    response.set_cookie(share_cookie_name(token), share_access_signature(token), max_age=3600,
+                        httponly=True, secure=get_settings().app_env == "production",
+                        samesite="strict")
+
+
 @router.get("/api/share/{token}")
-def shared_dashboard(token: str, db: DbSession, password: str | None = None) -> dict:
-    share = get_share(db, token, password)
+def shared_dashboard(token: str, db: DbSession, request: Request) -> dict:
+    share = get_share(db, token)
+    if share.password_hash:
+        supplied = request.cookies.get(share_cookie_name(token), "")
+        if not hmac.compare_digest(supplied, share_access_signature(token)):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "share password required")
     return dashboard_payload(
         db,
         share.user_id,

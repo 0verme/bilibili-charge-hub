@@ -1,0 +1,3 @@
+const form=document.querySelector('form');const message=document.querySelector('#message');
+async function api(path,options={}){const r=await fetch(path,{headers:{'Content-Type':'application/json'},...options});if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.status===204?null:r.json()}
+form.addEventListener('submit',async e=>{e.preventDefault();message.textContent='处理中…';const data=Object.fromEntries(new FormData(form));try{await api(`/api/auth/${data.mode}`,{method:'POST',body:JSON.stringify({username:data.username,password:data.password})});location.href='/dashboard'}catch(err){message.textContent=err.message;message.className='error'}});

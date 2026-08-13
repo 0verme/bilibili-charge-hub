@@ -56,6 +56,7 @@ class DeliveryView(BaseModel):
     status: str
     attempts: int
     response_summary: str | None
+    error_type: str | None
 
     model_config = {"from_attributes": True}
 
@@ -115,6 +116,15 @@ def channel_view(db: DbSession, channel: NotificationChannel) -> ChannelView:
     )
 
 
+def get_channel(db: DbSession, user_id: str, channel_id: str) -> NotificationChannel:
+    channel = db.scalar(select(NotificationChannel).where(
+        NotificationChannel.id == channel_id, NotificationChannel.user_id == user_id
+    ))
+    if channel is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "notification channel not found")
+    return channel
+
+
 def get_scheduler(request: Request) -> SchedulerManager:
     return request.app.state.scheduler
 
@@ -171,10 +181,42 @@ def create_channel(
         )
         db.add(retry_job)
         db.flush()
-        scheduler.sync_job(retry_job)
+        scheduler.sync_job(retry_job, db)
     db.commit()
     db.refresh(channel)
     return channel_view(db, channel)
+
+
+@router.put("/channels/{channel_id}", response_model=ChannelView)
+def update_channel(
+    channel_id: str, payload: ChannelInput, user: CurrentUser, db: DbSession
+) -> ChannelView:
+    channel = get_channel(db, user.id, channel_id)
+    try:
+        validate_channel_config(payload.provider, payload.config)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    channel.name = payload.name
+    channel.provider = payload.provider
+    channel.encrypted_config = get_credential_cipher().encrypt_json(payload.config)
+    channel.enabled = payload.enabled
+    for subscription in db.scalars(select(NotificationSubscription).where(
+        NotificationSubscription.channel_id == channel.id,
+        NotificationSubscription.user_id == user.id,
+    )):
+        db.delete(subscription)
+    db.flush()
+    db.add_all(NotificationSubscription(user_id=user.id, channel_id=channel.id, event_type=event)
+               for event in payload.event_types)
+    db.commit()
+    return channel_view(db, channel)
+
+
+@router.delete("/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_channel(channel_id: str, user: CurrentUser, db: DbSession) -> None:
+    channel = get_channel(db, user.id, channel_id)
+    db.delete(channel)
+    db.commit()
 
 
 @router.patch("/channels/{channel_id}/enabled", response_model=ChannelView)
@@ -252,3 +294,25 @@ def list_deliveries(user: CurrentUser, db: DbSession) -> list[NotificationDelive
             .limit(100)
         )
     )
+
+
+@router.post("/deliveries/{delivery_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+def retry_delivery(delivery_id: str, user: CurrentUser, db: DbSession) -> dict[str, str]:
+    delivery = db.scalar(select(NotificationDelivery).where(
+        NotificationDelivery.id == delivery_id, NotificationDelivery.user_id == user.id
+    ))
+    if delivery is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "notification delivery not found")
+    from datetime import UTC, datetime
+
+    from app.models import NotificationOutbox
+
+    event = db.get(NotificationOutbox, delivery.outbox_id)
+    if event is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "notification event no longer exists")
+    delivery.status = "pending"
+    delivery.available_at = datetime.now(UTC)
+    event.status = "retry"
+    event.available_at = datetime.now(UTC)
+    db.commit()
+    return {"status": "queued"}

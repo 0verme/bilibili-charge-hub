@@ -80,7 +80,12 @@ def test_share_is_random_expiring_password_protected_and_masked(dashboard_env) -
     token = created["token"]
     assert len(token) > 30
     assert client.get(f"/api/share/{token}").status_code == 401
-    response = client.get(f"/api/share/{token}", params={"password": "share-pass-42"})
+    assert client.get(f"/share/{token}").status_code == 200
+    unlocked = client.post(
+        f"/api/share/{token}/unlock", json={"password": "share-pass-42"}
+    )
+    assert unlocked.status_code == 204
+    response = client.get(f"/api/share/{token}")
     assert response.status_code == 200
     body = response.json()
     assert body["records"][0]["name"] not in {"Alice", "Bob"}

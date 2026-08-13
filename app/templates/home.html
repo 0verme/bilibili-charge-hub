@@ -4,21 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Bilibili Charge Hub</title>
-    <style>
-      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-      body { margin: 0; background: #09111f; color: #f4f7fb; }
-      main { max-width: 960px; margin: auto; padding: 72px 24px; }
-      h1 { margin: 10px 0; font-size: clamp(2.5rem, 7vw, 4.5rem); }
-      p { color: #aebbd0; line-height: 1.7; }
-      .tag { color: #65d9ff; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin-top: 32px; }
-      .card { padding: 20px; border: 1px solid #223451; border-radius: 16px; background: #101d31; }
-      a { color: #65d9ff; }
-    </style>
+    <link rel="stylesheet" href="/static/app.css">
   </head>
   <body>
-    <main>
-      <span class="tag">M0 · 安全运行基线</span>
+    <main class="hero">
+      <span class="muted">M10 · 单机可托管版</span>
       <h1>Bilibili Charge Hub</h1>
       <p>可自部署的多用户充电记录管理、自动化与通知平台。</p>
       <section class="grid">
@@ -26,7 +16,8 @@
         <article class="card"><h2>驾驶舱</h2><p>跟踪收益、趋势、贡献者和采集状态。</p></article>
         <article class="card"><h2>自动化</h2><p>定时采集、B 币券检查及可靠通知。</p></article>
       </section>
-      <p><a href="/docs">API 文档</a> · <a href="/healthz">健康检查</a></p>
+      <div class="actions"><a class="button" href="/login">登录 / 初始化</a><a class="button secondary" href="/dashboard">管理后台</a></div>
+      <p><a href="/docs">API 文档</a> · <a href="/readyz">就绪检查</a></p>
     </main>
   </body>
 </html>
