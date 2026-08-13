@@ -45,7 +45,7 @@ def client(db_factory: sessionmaker[Session]) -> Generator[TestClient, None, Non
 
 
 def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Session]) -> None:
-    credentials = {"username": "owner", "password": "correct-horse-42"}
+    credentials = {"username": "owner", "password": "12345"}
     response = client.post("/api/auth/setup", json=credentials)
 
     assert response.status_code == 201
