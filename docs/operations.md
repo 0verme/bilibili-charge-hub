@@ -3,27 +3,40 @@
 ## 启动与初始化
 
 1. 复制 `.env.example` 为 `.env`。
-2. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
-3. 运行 `docker compose up -d`。应用容器启动时自动执行 `alembic upgrade head`。
-4. 打开 `http://服务器地址:8000/login`，选择“首次初始化管理员”，然后进入管理后台。
+2. 将 `APP_DOMAIN` 设置为已经解析到服务器公网 IP 的域名；开放 TCP 80/443。
+3. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
+4. 运行 `docker compose up -d`。应用容器启动时自动执行 `alembic upgrade head`，Caddy 自动配置 HTTPS。
+5. 打开 `https://你的 APP_DOMAIN/login`，选择“首次初始化管理员”，然后进入管理后台。
 
-生产环境应在反向代理后启用 HTTPS；会话 Cookie 在 `APP_ENV=production` 时带 `Secure`、`HttpOnly` 与 `SameSite=Lax`。
+应用端口默认不发布到宿主机，只能通过同一 Compose 网络中的 Caddy 访问。Caddy 是唯一
+可信代理，因此应用容器使用 `FORWARDED_ALLOW_IPS=*`；不要在修改 Compose、直接公开应用
+端口后继续使用该值。会话 Cookie 在生产环境带 `Secure`、`HttpOnly` 与 `SameSite=Lax`。
+
+仅限本机开发时，可通过 `compose.dev.yaml` 暴露 HTTP 端口并使用 development Cookie：
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d db app
+```
 
 ## 备份与恢复
 
-备份 PostgreSQL：
+使用仓库脚本创建 custom-format dump、内容清单和 SHA-256 校验文件：
 
 ```bash
-docker compose exec -T db pg_dump -U bilibili -Fc bilibili_charge_hub > backup.dump
+./scripts/backup.sh
 ```
 
-恢复前停止应用写入并创建空数据库，然后执行：
+恢复脚本会先验证校验和与归档结构，再恢复到临时数据库检查 Alembic 版本；验证通过后
+停止 app、清理并恢复正式数据库：
 
 ```bash
-docker compose exec -T db pg_restore -U bilibili -d bilibili_charge_hub --clean --if-exists < backup.dump
+./scripts/restore.sh ./backups/你的备份.dump --confirm-destructive-restore
 ```
 
-备份必须和 `CREDENTIAL_ENCRYPTION_KEY` 一起安全保管；密钥丢失后，数据库中的 B 站与通知凭据无法恢复。不要把备份或密钥提交到 Git。
+脚本读取 `POSTGRES_USER` 和 `POSTGRES_DB`，不硬编码数据库身份。恢复后必须检查
+`/readyz`、登录、账号数量及凭据能否解密。备份、校验文件和
+`CREDENTIAL_ENCRYPTION_KEY` 必须分别保存在异地介质；密钥丢失后，数据库中的 B 站与
+通知凭据无法恢复。`backups/` 已被 Git 忽略。
 
 ## 升级与迁移
 

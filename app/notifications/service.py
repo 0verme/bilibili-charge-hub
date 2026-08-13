@@ -26,6 +26,24 @@ EVENT_TYPES = {
 MAX_ATTEMPTS = 5
 
 
+def reset_delivery_for_retry(
+    delivery: NotificationDelivery,
+    event: NotificationOutbox,
+    now: datetime | None = None,
+) -> None:
+    """Reset both retry budgets so a manually retried terminal event is selectable again."""
+    available_at = now or datetime.now(UTC)
+    delivery.status = "pending"
+    delivery.attempts = 0
+    delivery.available_at = available_at
+    delivery.delivered_at = None
+    delivery.error_type = None
+    delivery.response_summary = None
+    event.status = "retry"
+    event.attempts = 0
+    event.available_at = available_at
+
+
 def enqueue_event(
     db: Session,
     user_id: str,

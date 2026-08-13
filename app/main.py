@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
@@ -14,6 +14,7 @@ from sqlalchemy import text
 from app.crypto import get_credential_cipher
 from app.database import get_session_factory
 from app.logging_config import configure_app_logging
+from app.readiness import MigrationReadiness, check_migration_readiness, get_code_heads
 from app.routers.accounts import router as accounts_router
 from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
@@ -29,6 +30,15 @@ from app.web_security import SlidingWindowLimiter, browser_security
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+logger = logging.getLogger(__name__)
+
+
+def _failed_migration_check(reason: str) -> MigrationReadiness:
+    try:
+        expected_heads = get_code_heads()
+    except Exception:
+        expected_heads = ()
+    return MigrationReadiness((), expected_heads, reason)
 
 
 @asynccontextmanager
@@ -38,22 +48,39 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     settings.validate_runtime_secrets()
     if settings.database_url.get_secret_value().startswith("sqlite"):
         Path("data").mkdir(exist_ok=True)
-    scheduler = SchedulerManager(get_session_factory(), settings.app_timezone)
+    factory = get_session_factory()
+    scheduler = SchedulerManager(factory, settings.app_timezone)
     application.state.scheduler = scheduler
     application.state.templates = templates
-    application.state.background_tasks = set()
-    scheduler.start()
+    try:
+        with factory() as db:
+            migration = check_migration_readiness(db.connection())
+    except Exception:
+        logger.exception("database migration readiness inspection failed")
+        migration = _failed_migration_check("inspection_failed")
+    application.state.startup_migration = migration
+    if migration.ready:
+        scheduler.start()
+    else:
+        logger.error(
+            "scheduler disabled because database migrations are not current",
+            extra={
+                "migration_reason": migration.reason,
+                "migration_current_heads": migration.current_heads,
+                "migration_expected_heads": migration.expected_heads,
+            },
+        )
     try:
         yield
     finally:
-        scheduler.shutdown()
+        await scheduler.shutdown_gracefully(timeout_seconds=10)
 
 
 def create_app() -> FastAPI:
     application = FastAPI(
         title="Bilibili Charge Hub",
         description="多用户 Bilibili 充电记录、驾驶舱、定时任务与通知中心",
-        version="0.2.0",
+        version="0.2.1",
         lifespan=lifespan,
     )
     application.state.rate_limiter = SlidingWindowLimiter()
@@ -102,23 +129,36 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @application.get("/readyz", tags=["system"])
-    def readyz(request: Request):
-        checks: dict[str, str] = {}
+    def readyz(request: Request) -> JSONResponse:
+        checks: dict[str, object] = {}
+        migration_ready = False
         try:
             with get_session_factory()() as db:
                 db.execute(text("SELECT 1"))
                 checks["database"] = "ok"
-                version = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-                checks["migration"] = str(version)
+                migration = check_migration_readiness(db.connection())
+                checks["migration"] = migration.as_dict()
+                migration_ready = migration.ready
+        except Exception:
+            logger.exception("readiness database inspection failed")
+            checks["database"] = "unavailable"
+            checks["migration"] = _failed_migration_check("inspection_failed").as_dict()
+
+        try:
             get_credential_cipher()
             checks["cipher"] = "ok"
-            checks["scheduler"] = (
-                "ok" if request.app.state.scheduler.scheduler.running else "unavailable"
-            )
-        except Exception as exc:
-            checks["error"] = type(exc).__name__
-        healthy = not {"error", "unavailable"} & set(checks.values()) and "error" not in checks
-        from fastapi.responses import JSONResponse
+        except Exception:
+            logger.exception("readiness credential cipher inspection failed")
+            checks["cipher"] = "unavailable"
+
+        scheduler_ready = request.app.state.scheduler.scheduler.running
+        checks["scheduler"] = "ok" if scheduler_ready else "unavailable"
+        healthy = (
+            checks["database"] == "ok"
+            and migration_ready
+            and checks["cipher"] == "ok"
+            and scheduler_ready
+        )
 
         return JSONResponse(
             {"status": "ready" if healthy else "not_ready", "checks": checks},

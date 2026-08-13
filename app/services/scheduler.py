@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,7 @@ class SchedulerManager:
     def __init__(self, factory: sessionmaker[Session], timezone: str) -> None:
         self.factory = factory
         self.scheduler = AsyncIOScheduler(timezone=timezone)
+        self._dispatch_tasks: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
         self.scheduler.start()
@@ -50,16 +52,74 @@ class SchedulerManager:
             coalesce=True,
             max_instances=1,
         )
-        try:
-            with self.factory() as db:
-                for job in db.scalars(select(ScheduleJob).where(ScheduleJob.enabled.is_(True))):
-                    self.sync_job(job, db)
-        except SQLAlchemyError:
-            logger.warning("scheduler started before database migrations were available")
+        with self.factory() as db:
+            self.recover_interrupted_runs(db)
+            for job in db.scalars(select(ScheduleJob).where(ScheduleJob.enabled.is_(True))):
+                self.sync_job(job, db)
 
     def shutdown(self) -> None:
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
+
+    async def shutdown_gracefully(self, timeout_seconds: float = 10.0) -> int:
+        """Pause scheduling, wait briefly for dispatches, then cancel unfinished work.
+
+        The return value is the number of dispatch tasks that had to be cancelled. Lifespan
+        owners can await this method before process shutdown without waiting indefinitely.
+        """
+        if self.scheduler.running:
+            self.scheduler.pause()
+        cancelled = await self.wait_for_dispatches(timeout_seconds)
+        self.shutdown()
+        return cancelled
+
+    async def wait_for_dispatches(self, timeout_seconds: float = 10.0) -> int:
+        """Wait up to ``timeout_seconds`` and cancel dispatches still running afterwards."""
+        timeout_seconds = max(0.0, timeout_seconds)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while self._dispatch_tasks:
+            active = {task for task in self._dispatch_tasks if not task.done()}
+            if not active:
+                break
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            _, pending = await asyncio.wait(active, timeout=remaining)
+            if pending:
+                break
+        pending = {task for task in self._dispatch_tasks if not task.done()}
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return len(pending)
+
+    def submit_dispatch(self, job_id: str, run_id: str | None = None) -> asyncio.Task[None]:
+        """Start a manually requested dispatch and include it in graceful shutdown tracking."""
+        task = asyncio.create_task(self.dispatch(job_id, run_id))
+        self._dispatch_tasks.add(task)
+        task.add_done_callback(self._dispatch_tasks.discard)
+        return task
+
+    @staticmethod
+    def recover_interrupted_runs(db: Session) -> int:
+        """Fail non-terminal runs left behind by an earlier process immediately on startup."""
+        now = datetime.now(UTC)
+        runs = list(
+            db.scalars(
+                select(JobRun).where(JobRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]))
+            )
+        )
+        for run in runs:
+            run.status = RunStatus.FAILED
+            run.error = "run interrupted by process restart"
+            run.finished_at = now
+            started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
+            run.duration_ms = max(0, int((now - started_at).total_seconds() * 1000))
+        if runs:
+            db.commit()
+        return len(runs)
 
     def sync_job(self, job: ScheduleJob, db: Session | None = None) -> None:
         if not job.enabled:
@@ -69,6 +129,11 @@ class SchedulerManager:
                 db.commit()
             return
         trigger = self._build_trigger(job)
+        if not self.scheduler.running:
+            job.next_run_at = trigger.get_next_fire_time(None, datetime.now(UTC))
+            if db is not None:
+                db.commit()
+            return
         runtime_job = self.scheduler.add_job(
             self.dispatch,
             trigger=trigger,
@@ -83,9 +148,19 @@ class SchedulerManager:
         if db is not None:
             db.commit()
 
-    def remove_job(self, job_id: str) -> None:
+    def remove_job(self, job_id: str) -> bool:
         if self.scheduler.get_job(job_id):
             self.scheduler.remove_job(job_id)
+            return True
+        return False
+
+    def remove_account_jobs(self, account_id: str) -> int:
+        """Remove every runtime job for an account whose authentication became invalid."""
+        with self.factory() as db:
+            job_ids = list(
+                db.scalars(select(ScheduleJob.id).where(ScheduleJob.bili_account_id == account_id))
+            )
+        return sum(self.remove_job(job_id) for job_id in job_ids)
 
     async def cleanup_expired(self) -> None:
         now = datetime.now(UTC)
@@ -121,6 +196,9 @@ class SchedulerManager:
         raise ValueError(f"unsupported trigger type: {job.trigger_type}")
 
     async def dispatch(self, job_id: str, run_id: str | None = None) -> None:
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._dispatch_tasks.add(current_task)
         client = BilibiliClient()
         try:
             with self.factory() as db:
@@ -128,6 +206,16 @@ class SchedulerManager:
                 if job is None or not job.enabled:
                     self._finish_queued_run(db, run_id, "job is disabled")
                     return
+                if run_id is None:
+                    run = JobRun(
+                        user_id=job.user_id,
+                        schedule_job_id=job.id,
+                        status=RunStatus.QUEUED,
+                        started_at=datetime.now(UTC),
+                    )
+                    db.add(run)
+                    db.commit()
+                    run_id = run.id
                 if job.kind == JobKind.NOTIFICATION_RETRY:
                     delivery = NotificationDeliveryService()
                     try:
@@ -160,15 +248,13 @@ class SchedulerManager:
                     await handler(db, account, job.id, run_id=run_id)
                 else:
                     self._finish_queued_run(db, run_id, "unsupported job kind")
+        except asyncio.CancelledError:
+            self._fail_run(run_id, "run interrupted during shutdown")
+            raise
         except Exception:
             logger.exception("scheduled job failed", extra={"job_id": job_id})
             with self.factory() as db:
-                if run_id:
-                    queued_run = db.get(JobRun, run_id)
-                    if queued_run and queued_run.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
-                        queued_run.status = RunStatus.FAILED
-                        queued_run.error = "job execution failed"
-                        queued_run.finished_at = datetime.now(UTC)
+                self._fail_run(run_id, "job execution failed", db)
                 failed_job = db.get(ScheduleJob, job_id)
                 if failed_job:
                     if not failed_job.enabled:
@@ -183,6 +269,66 @@ class SchedulerManager:
                     db.commit()
         finally:
             await client.close()
+            try:
+                self._persist_next_run_at(job_id)
+            except SQLAlchemyError:
+                logger.warning(
+                    "could not persist the next scheduled runtime",
+                    extra={"job_id": job_id},
+                    exc_info=True,
+                )
+            if current_task is not None:
+                self._dispatch_tasks.discard(current_task)
+
+    def _fail_run(self, run_id: str | None, error: str, db: Session | None = None) -> None:
+        if not run_id:
+            return
+        owned_db = db is None
+        session = db or self.factory()
+        try:
+            run = session.get(JobRun, run_id)
+            if run and run.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
+                finished_at = datetime.now(UTC)
+                run.status = RunStatus.FAILED
+                run.error = error
+                run.finished_at = finished_at
+                started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
+                run.duration_ms = max(
+                    0, int((finished_at - started_at).total_seconds() * 1000)
+                )
+                session.commit()
+        finally:
+            if owned_db:
+                session.close()
+
+    def _persist_next_run_at(self, job_id: str) -> None:
+        with self.factory() as db:
+            job = db.get(ScheduleJob, job_id)
+            if job is None:
+                self.remove_job(job_id)
+                return
+            if job.bili_account_id:
+                account = db.get(BiliAccount, job.bili_account_id)
+                if account is None or account.status != AccountStatus.ACTIVE:
+                    account_jobs = list(
+                        db.scalars(
+                            select(ScheduleJob).where(
+                                ScheduleJob.bili_account_id == job.bili_account_id
+                            )
+                        )
+                    )
+                    for account_job in account_jobs:
+                        account_job.next_run_at = None
+                    db.commit()
+                    self.remove_account_jobs(job.bili_account_id)
+                    return
+            runtime_job = self.scheduler.get_job(job.id)
+            if not job.enabled:
+                self.remove_job(job.id)
+                job.next_run_at = None
+            else:
+                job.next_run_at = runtime_job.next_run_time if runtime_job else None
+            db.commit()
 
     @staticmethod
     def _finish_queued_run(db: Session, run_id: str | None, error: str | None = None) -> None:

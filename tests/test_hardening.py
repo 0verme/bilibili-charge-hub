@@ -40,12 +40,19 @@ def hardened_client() -> Generator[tuple[TestClient, sessionmaker[Session]], Non
 def test_browser_writes_require_same_origin_and_csrf(hardened_client) -> None:
     client, _ = hardened_client
     payload = {"username": "member", "password": "member-password-42", "role": "user"}
-    assert client.post(
+    missing_origin = client.post("/api/users", json=payload)
+    assert missing_origin.status_code == 403
+    assert missing_origin.json()["detail"]["code"] == "request_origin_required"
+    cross_origin = client.post(
         "/api/users", json=payload, headers={"Origin": "http://evil.example"}
-    ).status_code == 403
-    assert client.post(
+    )
+    assert cross_origin.status_code == 403
+    assert cross_origin.json()["detail"]["code"] == "cross_origin_rejected"
+    missing_csrf = client.post(
         "/api/users", json=payload, headers={"Origin": "http://testserver"}
-    ).status_code == 403
+    )
+    assert missing_csrf.status_code == 403
+    assert missing_csrf.json()["detail"]["code"] == "csrf_validation_failed"
     response = client.post(
         "/api/users",
         json=payload,
@@ -64,9 +71,21 @@ def test_password_change_revokes_other_sessions(hardened_client) -> None:
         "/api/auth/login",
         json={"username": "owner", "password": "correct-horse-42"},
     ).status_code == 200
+    browser_headers = {
+        "Origin": "http://testserver",
+        "X-CSRF-Token": client.cookies["csrf_token"],
+    }
+    rejected = client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong", "new_password": "changed-horse-84"},
+        headers=browser_headers,
+    )
+    assert rejected.status_code == 401
+    assert rejected.json()["detail"]["code"] == "invalid_current_password"
     response = client.post(
         "/api/auth/change-password",
         json={"current_password": "correct-horse-42", "new_password": "changed-horse-84"},
+        headers=browser_headers,
     )
     assert response.status_code == 204
     assert second.get("/api/auth/me").status_code == 401
@@ -95,3 +114,9 @@ def test_dashboard_template_does_not_use_unsafe_dom_rendering() -> None:
         content = __import__("pathlib").Path(path).read_text(encoding="utf-8")
         assert "innerHTML" not in content
         assert "cdn.jsdelivr" not in content
+
+
+def test_dashboard_frontend_redirects_only_for_app_session_errors() -> None:
+    content = __import__("pathlib").Path("app/static/dashboard.js").read_text(encoding="utf-8")
+    assert "['session_expired','auth_required'].includes(code)" in content
+    assert "showFormError(e.target,error.message)" in content

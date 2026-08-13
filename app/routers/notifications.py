@@ -19,6 +19,7 @@ from app.notifications.service import (
     EVENT_TYPES,
     NotificationDeliveryService,
     enqueue_event,
+    reset_delivery_for_retry,
 )
 from app.services.scheduler import SchedulerManager
 
@@ -249,6 +250,8 @@ async def test_channel(channel_id: str, user: CurrentUser, db: DbSession) -> dic
     )
     if channel is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "notification channel not found")
+    if not channel.enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "notification channel is disabled")
     event = enqueue_event(
         db,
         user.id,
@@ -310,9 +313,6 @@ def retry_delivery(delivery_id: str, user: CurrentUser, db: DbSession) -> dict[s
     event = db.get(NotificationOutbox, delivery.outbox_id)
     if event is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "notification event no longer exists")
-    delivery.status = "pending"
-    delivery.available_at = datetime.now(UTC)
-    event.status = "retry"
-    event.available_at = datetime.now(UTC)
+    reset_delivery_for_retry(delivery, event, datetime.now(UTC))
     db.commit()
     return {"status": "queued"}

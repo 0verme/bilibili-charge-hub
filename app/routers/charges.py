@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -11,6 +11,7 @@ from app.bilibili.client import (
     BilibiliClient,
     get_bilibili_client,
 )
+from app.errors import raise_api_error
 from app.models import BiliAccount
 from app.services.collection import ChargeCollectionService, CollectionBusyError
 
@@ -40,15 +41,27 @@ async def collect_account(
     )
     if account is None:
         await client.close()
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bilibili account not found")
+        raise_api_error(
+            status.HTTP_404_NOT_FOUND,
+            "bili_account_not_found",
+            "Bilibili account not found",
+        )
     try:
         result = await ChargeCollectionService(client).collect(db, account)
     except CollectionBusyError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    except BilibiliAuthenticationError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bilibili login expired") from exc
-    except (BilibiliApiError, OSError) as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Bilibili collection failed") from exc
+        raise_api_error(status.HTTP_409_CONFLICT, "collection_busy", str(exc))
+    except BilibiliAuthenticationError:
+        raise_api_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "bili_auth_expired",
+            "Bilibili login expired; scan the QR code to reconnect the account",
+        )
+    except (BilibiliApiError, OSError):
+        raise_api_error(
+            status.HTTP_502_BAD_GATEWAY,
+            "bili_collection_failed",
+            "Bilibili collection failed",
+        )
     finally:
         await client.close()
     return CollectionResultView(

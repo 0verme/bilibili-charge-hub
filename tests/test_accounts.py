@@ -7,7 +7,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.bilibili.client import QrCode, QrPollResult, get_bilibili_client
+from app.bilibili.client import (
+    BilibiliAuthenticationError,
+    QrCode,
+    QrPollResult,
+    get_bilibili_client,
+)
+from app.crypto import get_credential_cipher
 from app.database import get_db
 from app.main import create_app
 from app.models import Base, BiliAccount, JobKind, QrLoginSession, ScheduleJob, User, UserRole
@@ -30,6 +36,14 @@ class FakeBilibiliClient:
             },
             refresh_token="test-refresh-secret",
         )
+
+    async def close(self) -> None:
+        return None
+
+
+class ExpiredBilibiliClient:
+    async def fetch_charge_page(self, cookie_header: str, page: int, page_size: int):
+        raise BilibiliAuthenticationError("expired")
 
     async def close(self) -> None:
         return None
@@ -62,6 +76,12 @@ def account_client(
         client.post(
             "/api/auth/setup",
             json={"username": "owner", "password": "correct-horse-42"},
+        )
+        client.headers.update(
+            {
+                "Origin": "http://testserver",
+                "X-CSRF-Token": client.cookies["csrf_token"],
+            }
         )
         yield client
 
@@ -137,3 +157,28 @@ def test_qr_sessions_and_accounts_are_tenant_isolated(
     assert account_client.get("/api/bili/accounts").json() == []
     assert account_client.get(f"/api/bili/qr-sessions/{qr_id}").status_code == 404
     assert account_client.delete(f"/api/bili/accounts/{account_id}").status_code == 404
+
+
+def test_bilibili_auth_expiry_uses_distinct_error_code(
+    account_client: TestClient,
+    account_db_factory: sessionmaker[Session],
+) -> None:
+    with account_db_factory() as db:
+        owner = db.scalar(select(User).where(User.username == "owner"))
+        assert owner is not None
+        account = BiliAccount(
+            user_id=owner.id,
+            bili_uid="expired-account",
+            encrypted_cookie=get_credential_cipher().encrypt(
+                "DedeUserID=expired-account; SESSDATA=expired; bili_jct=expired"
+            ),
+        )
+        db.add(account)
+        db.commit()
+        account_id = account.id
+    account_client.app.dependency_overrides[get_bilibili_client] = ExpiredBilibiliClient
+
+    response = account_client.post(f"/api/bili/accounts/{account_id}/collect")
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "bili_auth_expired"

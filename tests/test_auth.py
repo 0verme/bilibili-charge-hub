@@ -11,6 +11,15 @@ from app.main import create_app
 from app.models import Base, User, UserRole
 
 
+def enable_browser_writes(client: TestClient) -> None:
+    client.headers.update(
+        {
+            "Origin": "http://testserver",
+            "X-CSRF-Token": client.cookies["csrf_token"],
+        }
+    )
+
+
 @pytest.fixture
 def db_factory() -> sessionmaker[Session]:
     engine = create_engine(
@@ -42,6 +51,7 @@ def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Se
     assert response.status_code == 201
     assert response.json()["role"] == "admin"
     assert "session_token" in client.cookies
+    enable_browser_writes(client)
     with db_factory() as db:
         stored = db.scalar(select(User).where(User.username == "owner"))
         assert stored is not None
@@ -49,7 +59,9 @@ def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Se
 
     assert client.get("/api/auth/me").status_code == 200
     assert client.post("/api/auth/logout").status_code == 204
-    assert client.get("/api/auth/me").status_code == 401
+    unauthenticated = client.get("/api/auth/me")
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["detail"]["code"] == "auth_required"
 
     response = client.post("/api/auth/login", json=credentials)
     assert response.status_code == 200
@@ -59,6 +71,7 @@ def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Se
 def test_setup_is_one_time_and_admin_can_create_user(client: TestClient) -> None:
     owner = {"username": "owner", "password": "correct-horse-42"}
     assert client.post("/api/auth/setup", json=owner).status_code == 201
+    enable_browser_writes(client)
     assert client.post("/api/auth/setup", json=owner).status_code == 409
 
     response = client.post(
@@ -81,7 +94,19 @@ def test_invalid_login_does_not_reveal_which_field_failed(client: TestClient) ->
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "invalid credentials"
+    assert response.json()["detail"] == {
+        "code": "invalid_credentials",
+        "message": "invalid credentials",
+    }
+
+
+def test_invalid_session_uses_session_expired_error_code(client: TestClient) -> None:
+    client.cookies.set("session_token", "invalid-session-token")
+
+    response = client.get("/api/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "session_expired"
 
 
 def test_core_schema_contains_all_required_tables(db_factory: sessionmaker[Session]) -> None:

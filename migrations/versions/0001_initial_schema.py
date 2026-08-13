@@ -20,7 +20,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.UniqueConstraint("username"),
     )
-    op.create_index("ix_users_username", "users", ["username"])
+    op.create_index("ix_users_username", "users", ["username"], unique=True)
     op.create_table("user_sessions",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
     )
     for name, cols in [("ix_user_sessions_user_id", ["user_id"]), ("ix_user_sessions_token_hash", ["token_hash"]), ("ix_user_sessions_expires_at", ["expires_at"])]:
-        op.create_index(name, "user_sessions", cols)
+        op.create_index(name, "user_sessions", cols, unique=name == "ix_user_sessions_token_hash")
     op.create_table("bili_accounts",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
@@ -79,7 +79,17 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("bili_account_id", sa.String(36), sa.ForeignKey("bili_accounts.id", ondelete="CASCADE")),
-        sa.Column("kind", sa.String(20), nullable=False),
+        sa.Column(
+            "kind",
+            sa.Enum(
+                "CHARGE_COLLECTION",
+                "COUPON_CLAIM",
+                "NOTIFICATION_RETRY",
+                name="jobkind",
+                native_enum=False,
+            ),
+            nullable=False,
+        ),
         sa.Column("trigger_type", sa.String(16), nullable=False),
         sa.Column("trigger_config", sa.JSON(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),

@@ -28,13 +28,22 @@ python -m venv .venv
 
 ## Docker Compose
 
-复制 `.env.example` 为 `.env`，替换其中所有占位密码和密钥，然后运行：
+复制 `.env.example` 为 `.env`，替换其中的域名、密码和密钥，将 `APP_DOMAIN`
+解析到服务器，然后运行：
 
 ```bash
 docker compose up -d
 ```
 
-应用容器以非 root 用户运行，PostgreSQL 数据保存在命名卷中。不要提交 `.env`、Cookie、数据库文件或日志。
+访问 `https://你的 APP_DOMAIN/login`。默认 Compose 使用 Caddy 自动申请和续期 TLS
+证书，应用端口只在容器网络内暴露；应用容器以非 root 用户运行，PostgreSQL 数据
+保存在命名卷中。不要提交 `.env`、Cookie、数据库文件、备份或日志。
+
+仅限本机开发且不需要 Secure Cookie 时，可运行：
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d db app
+```
 
 > 当前版本只支持一个 app 副本和一个 Uvicorn worker。不要使用 `--workers` 或扩展 Compose app 副本，否则内存调度器可能重复执行任务。
 

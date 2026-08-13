@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Response, status
 from sqlalchemy import func, select
 
 from app.auth import AdminUser, CurrentUser, DbSession, SessionToken
+from app.errors import raise_api_error
 from app.models import User, UserRole, UserSession
 from app.schemas import Credentials, PasswordChange, PasswordReset, UserCreate, UserUpdate, UserView
 from app.security import (
@@ -39,7 +40,11 @@ def set_session_cookie(response: Response, token: str, csrf_token: str) -> None:
 @router.post("/setup", response_model=UserView, status_code=status.HTTP_201_CREATED)
 def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User:
     if db.scalar(select(func.count()).select_from(User)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "system is already initialized")
+        raise_api_error(
+            status.HTTP_409_CONFLICT,
+            "already_initialized",
+            "system is already initialized",
+        )
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -68,7 +73,7 @@ def login(payload: Credentials, response: Response, db: DbSession) -> User:
         or not user.is_active
         or not verify_password(payload.password, user.password_hash)
     ):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+        raise_api_error(status.HTTP_401_UNAUTHORIZED, "invalid_credentials", "invalid credentials")
     token, csrf_token = new_session_token(), new_csrf_token()
     db.add(
         UserSession(
@@ -112,7 +117,11 @@ def change_password(
     session_token: SessionToken = None,
 ) -> None:
     if not verify_password(payload.current_password, user.password_hash):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "current password is incorrect")
+        raise_api_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_current_password",
+            "current password is incorrect",
+        )
     user.password_hash = hash_password(payload.new_password)
     current_hash = hash_session_token(session_token) if session_token else ""
     sessions = db.scalars(select(UserSession).where(UserSession.user_id == user.id)).all()
@@ -129,7 +138,7 @@ def create_user(
     db: DbSession,
 ) -> User:
     if db.scalar(select(User.id).where(User.username == payload.username)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "username already exists")
+        raise_api_error(status.HTTP_409_CONFLICT, "username_exists", "username already exists")
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -152,7 +161,7 @@ def list_users(
 def get_user_or_404(db: DbSession, user_id: str) -> User:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        raise_api_error(status.HTTP_404_NOT_FOUND, "user_not_found", "user not found")
     return user
 
 
@@ -160,7 +169,11 @@ def get_user_or_404(db: DbSession, user_id: str) -> User:
 def update_user(user_id: str, payload: UserUpdate, admin: AdminUser, db: DbSession) -> User:
     target = get_user_or_404(db, user_id)
     if target.id == admin.id and payload.is_active is False:
-        raise HTTPException(status.HTTP_409_CONFLICT, "cannot disable current administrator")
+        raise_api_error(
+            status.HTTP_409_CONFLICT,
+            "cannot_disable_self",
+            "cannot disable current administrator",
+        )
     target.is_active = payload.is_active
     if not payload.is_active:
         for stored in db.scalars(select(UserSession).where(UserSession.user_id == target.id)):

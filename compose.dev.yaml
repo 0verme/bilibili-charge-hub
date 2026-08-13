@@ -1,0 +1,10 @@
+services:
+  caddy:
+    profiles: ["production"]
+
+  app:
+    environment:
+      APP_ENV: development
+      FORWARDED_ALLOW_IPS: 127.0.0.1
+    ports:
+      - "${APP_PORT:-8000}:8000"

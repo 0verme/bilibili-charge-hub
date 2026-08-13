@@ -1,4 +1,3 @@
-import asyncio
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -172,7 +171,6 @@ def update_job_schedule(
 @router.post("/{job_id}/run", status_code=status.HTTP_202_ACCEPTED)
 async def run_job_now(
     job_id: str,
-    request: Request,
     user: CurrentUser,
     db: DbSession,
     scheduler: SchedulerDep,
@@ -192,10 +190,7 @@ async def run_job_now(
     )
     db.add(run)
     db.commit()
-    task = asyncio.create_task(scheduler.dispatch(job_id, run.id))
-    tasks: set[asyncio.Task] = request.app.state.background_tasks
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
+    scheduler.submit_dispatch(job_id, run.id)
     return {"status": "queued", "run_id": run.id}
 
 

@@ -1,6 +1,8 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -15,8 +17,13 @@ from app.models import (
     UserRole,
 )
 from app.notifications.providers import SendResult, validate_webhook_url
-from app.notifications.service import NotificationDeliveryService, enqueue_event
-from app.routers.notifications import mask_config, validate_channel_config
+from app.notifications.service import MAX_ATTEMPTS, NotificationDeliveryService, enqueue_event
+from app.routers.notifications import (
+    mask_config,
+    retry_delivery,
+    validate_channel_config,
+)
+from app.routers.notifications import test_channel as send_test_channel
 from app.security import hash_password
 
 
@@ -158,3 +165,63 @@ def test_channel_configuration_is_masked_and_dangerous_headers_are_rejected() ->
             "webhook",
             {"url": "https://example.com/hook", "headers": {"Host": "internal"}},
         )
+
+
+def test_manual_retry_resets_terminal_event_budget_and_processes_again(
+    notification_db: Session,
+) -> None:
+    user = make_notification_user(notification_db)
+    channel = add_channel(notification_db, user, "success", "good")
+    event = enqueue_event(
+        notification_db,
+        user.id,
+        "new_charge",
+        "charge:terminal",
+        {"supporter": "Alice", "amount": "10.00"},
+    )
+    assert event is not None
+    notification_db.flush()
+    future = datetime.now(UTC) + timedelta(days=1)
+    event.status = "failed"
+    event.attempts = MAX_ATTEMPTS
+    event.available_at = future
+    delivery = NotificationDelivery(
+        user_id=user.id,
+        outbox_id=event.id,
+        channel_id=channel.id,
+        status="failed",
+        attempts=MAX_ATTEMPTS,
+        available_at=future,
+        error_type="provider_rejected",
+        response_summary="HTTP 503",
+    )
+    notification_db.add(delivery)
+    notification_db.commit()
+
+    assert retry_delivery(delivery.id, user, notification_db) == {"status": "queued"}
+    notification_db.refresh(event)
+    notification_db.refresh(delivery)
+    assert event.status == "retry" and event.attempts == 0
+    assert delivery.status == "pending" and delivery.attempts == 0
+    assert event.available_at <= datetime.now(UTC).replace(tzinfo=None)
+
+    service = NotificationDeliveryService(providers={"good": SuccessfulProvider()})
+    assert asyncio.run(service.process_pending(notification_db, user.id)) == 1
+    notification_db.refresh(event)
+    notification_db.refresh(delivery)
+    assert event.status == "delivered"
+    assert delivery.status == "succeeded" and delivery.attempts == 1
+
+
+def test_disabled_channel_cannot_report_a_successful_test(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    channel = add_channel(notification_db, user, "disabled", "good")
+    channel.enabled = False
+    notification_db.commit()
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(send_test_channel(channel.id, user, notification_db))
+
+    assert caught.value.status_code == 409
+    assert caught.value.detail == "notification channel is disabled"
+    assert notification_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 0

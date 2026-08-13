@@ -10,6 +10,7 @@ dist/
 build/
 *.egg-info/
 data/
+backups/
 *.sqlite3
 *.db
 *.log
