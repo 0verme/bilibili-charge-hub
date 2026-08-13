@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from app.auth import AdminUser, CurrentUser, DbSession, SessionToken
+from app.auth import AdminUser, CurrentUser, DbSession, SessionToken, has_active_admin
 from app.errors import raise_api_error
 from app.models import User, UserRole, UserSession
 from app.schemas import Credentials, PasswordChange, PasswordReset, UserCreate, UserUpdate, UserView
@@ -39,12 +39,14 @@ def set_session_cookie(response: Response, token: str, csrf_token: str) -> None:
 
 @router.post("/setup", response_model=UserView, status_code=status.HTTP_201_CREATED)
 def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User:
-    if db.scalar(select(func.count()).select_from(User)):
+    if has_active_admin(db):
         raise_api_error(
             status.HTTP_409_CONFLICT,
             "already_initialized",
             "system is already initialized",
         )
+    if db.scalar(select(User.id).where(User.username == payload.username)):
+        raise_api_error(status.HTTP_409_CONFLICT, "username_exists", "username already exists")
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),

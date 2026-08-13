@@ -12,7 +12,7 @@ python -m venv .venv
 .venv/Scripts/uvicorn app.main:app --reload
 ```
 
-访问 `http://localhost:8000/login` 完成初始化或登录。存活检查位于 `/healthz`，依赖就绪检查位于 `/readyz`，OpenAPI 文档位于 `/docs`。
+访问 `http://localhost:8000/login`。系统会在没有启用管理员时自动跳转到初始化页，否则显示登录页。存活检查位于 `/healthz`，依赖就绪检查位于 `/readyz`，OpenAPI 文档位于 `/docs`。
 
 首次启动后，在初始化页创建唯一的首位管理员。后续可在“用户与安全”中管理用户；登录会话保存在 HttpOnly Cookie 中，写操作同时受同源与 CSRF 校验保护。
 

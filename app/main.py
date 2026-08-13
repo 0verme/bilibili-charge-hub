@@ -5,12 +5,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, Response, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 
+from app.auth import DbSession, SessionToken, get_optional_current_user, has_active_admin
 from app.crypto import get_credential_cipher
 from app.database import get_session_factory
 from app.logging_config import configure_app_logging
@@ -193,8 +194,28 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(request=request, name="home.html")
 
     @application.get("/login", response_class=HTMLResponse, include_in_schema=False)
-    def login_page(request: Request) -> HTMLResponse:
+    def login_page(
+        request: Request,
+        db: DbSession,
+        session_token: SessionToken = None,
+    ) -> Response:
+        if get_optional_current_user(db, session_token):
+            return RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+        if not has_active_admin(db):
+            return RedirectResponse("/setup", status_code=status.HTTP_303_SEE_OTHER)
         return templates.TemplateResponse(request=request, name="login.html")
+
+    @application.get("/setup", response_class=HTMLResponse, include_in_schema=False)
+    def setup_page(
+        request: Request,
+        db: DbSession,
+        session_token: SessionToken = None,
+    ) -> Response:
+        if get_optional_current_user(db, session_token):
+            return RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+        if has_active_admin(db):
+            return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+        return templates.TemplateResponse(request=request, name="setup.html")
 
     return application
 

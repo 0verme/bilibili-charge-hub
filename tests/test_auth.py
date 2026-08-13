@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.main import create_app
 from app.models import Base, User, UserRole
+from app.security import hash_password
 
 
 def enable_browser_writes(client: TestClient) -> None:
@@ -81,6 +82,88 @@ def test_setup_is_one_time_and_admin_can_create_user(client: TestClient) -> None
     assert response.status_code == 201
     assert response.json()["role"] == UserRole.USER
     assert len(client.get("/api/users").json()) == 2
+
+
+def test_auth_pages_route_by_initialization_and_session_state(client: TestClient) -> None:
+    response = client.get("/login", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/setup"
+
+    setup_page = client.get("/setup")
+    assert setup_page.status_code == 200
+    assert "创建首位管理员" in setup_page.text
+    assert "操作" not in setup_page.text
+
+    credentials = {"username": "owner", "password": "correct-horse-42"}
+    assert client.post("/api/auth/setup", json=credentials).status_code == 201
+
+    for path in ("/login", "/setup"):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard"
+
+    client.cookies.clear()
+    login_page = client.get("/login")
+    assert login_page.status_code == 200
+    assert "登录管理后台" in login_page.text
+    assert "首次初始化管理员" not in login_page.text
+
+    response = client.get("/setup", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_setup_reopens_when_all_admins_are_disabled(
+    client: TestClient, db_factory: sessionmaker[Session]
+) -> None:
+    credentials = {"username": "owner", "password": "correct-horse-42"}
+    assert client.post("/api/auth/setup", json=credentials).status_code == 201
+    with db_factory() as db:
+        owner = db.scalar(select(User).where(User.username == "owner"))
+        assert owner is not None
+        owner.is_active = False
+        db.commit()
+    client.cookies.clear()
+
+    response = client.get("/login", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/setup"
+
+    duplicate = client.post("/api/auth/setup", json=credentials)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["code"] == "username_exists"
+
+    recovered = client.post(
+        "/api/auth/setup",
+        json={"username": "recovery-admin", "password": "new-admin-password-42"},
+    )
+    assert recovered.status_code == 201
+    assert recovered.json()["role"] == UserRole.ADMIN
+
+
+def test_setup_is_available_when_only_regular_users_exist(
+    client: TestClient, db_factory: sessionmaker[Session]
+) -> None:
+    with db_factory() as db:
+        db.add(
+            User(
+                username="member",
+                password_hash=hash_password("member-password-42"),
+                role=UserRole.USER,
+            )
+        )
+        db.commit()
+
+    response = client.get("/login", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/setup"
+    assert (
+        client.post(
+            "/api/auth/setup",
+            json={"username": "owner", "password": "correct-horse-42"},
+        ).status_code
+        == 201
+    )
 
 
 def test_invalid_login_does_not_reveal_which_field_failed(client: TestClient) -> None:

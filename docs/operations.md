@@ -6,7 +6,7 @@
 2. 将 `APP_DOMAIN` 设置为已经解析到服务器公网 IP 的域名；开放 TCP 80/443。
 3. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
 4. 运行 `docker compose up -d`。应用容器启动时自动执行 `alembic upgrade head`，Caddy 自动配置 HTTPS。
-5. 打开 `https://你的 APP_DOMAIN/login`，选择“首次初始化管理员”，然后进入管理后台。
+5. 打开 `https://你的 APP_DOMAIN/login`；系统会在没有启用管理员时自动进入初始化页，创建管理员后进入管理后台。
 
 应用端口默认不发布到宿主机，只能通过同一 Compose 网络中的 Caddy 访问。Caddy 是唯一
 可信代理，因此应用容器使用 `FORWARDED_ALLOW_IPS=*`；不要在修改 Compose、直接公开应用

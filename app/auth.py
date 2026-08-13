@@ -14,6 +14,32 @@ DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Cookie()]
 
 
+def has_active_admin(db: Session) -> bool:
+    return (
+        db.scalar(
+            select(User.id)
+            .where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def get_optional_current_user(db: Session, session_token: str | None) -> User | None:
+    if not session_token:
+        return None
+    session = db.scalar(
+        select(UserSession).where(UserSession.token_hash == hash_session_token(session_token))
+    )
+    now = datetime.now(UTC)
+    if session is None or session.expires_at.replace(tzinfo=UTC) <= now:
+        return None
+    user = db.get(User, session.user_id)
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
 def get_current_user(db: DbSession, session_token: SessionToken = None) -> User:
     if not session_token:
         raise_api_error(status.HTTP_401_UNAUTHORIZED, "auth_required", "authentication required")
