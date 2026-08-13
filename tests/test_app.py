@@ -29,3 +29,13 @@ def test_security_headers_and_api_cache_control() -> None:
     assert response.headers["x-frame-options"] == "DENY"
     assert "default-src 'self'" in response.headers["content-security-policy"]
     assert api_response.headers["cache-control"] == "no-store"
+
+
+def test_dashboard_script_localizes_scheduled_job_names() -> None:
+    with TestClient(create_app()) as client:
+        script = client.get("/static/dashboard.js")
+
+    assert script.status_code == 200
+    assert "charge_collection:'充电记录采集'" in script.text
+    assert "coupon_claim:'B 币券领取'" in script.text
+    assert "notification_retry:'通知失败重试'" in script.text
