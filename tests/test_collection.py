@@ -25,7 +25,7 @@ from app.models import (
     UserRole,
 )
 from app.security import hash_password
-from app.services.collection import ChargeCollectionService, stable_event_id
+from app.services.collection import ChargeCollectionService, parse_charge_time, stable_event_id
 
 
 class PagedChargeClient:
@@ -139,6 +139,14 @@ def test_event_id_prefers_source_id_and_has_stable_fallback() -> None:
         "ctime": datetime(2026, 8, 12, tzinfo=UTC).isoformat(),
     }
     assert stable_event_id("account", item) == stable_event_id("account", dict(item))
+
+
+def test_charge_time_treats_naive_bilibili_time_as_shanghai_local_time() -> None:
+    expected = datetime(2026, 8, 13, 14, 29, 31, tzinfo=UTC)
+
+    assert parse_charge_time("2026-08-13 22:29:31") == expected
+    assert parse_charge_time("2026-08-13T22:29:31+08:00") == expected
+    assert parse_charge_time("2026-08-13T14:29:31Z") == expected
 
 
 def test_bilibili_client_rejects_changed_charge_schema() -> None:

@@ -3,6 +3,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -18,6 +19,7 @@ from app.notifications.service import enqueue_event
 
 PAGE_SIZE = 50
 MAX_PAGES = 100
+BILIBILI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 _account_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -60,7 +62,9 @@ def parse_charge_time(value: object) -> datetime:
     if not text:
         raise ValueError("charge record has no timestamp")
     parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    return parsed.replace(tzinfo=parsed.tzinfo or UTC).astimezone(UTC)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=BILIBILI_TIMEZONE)
+    return parsed.astimezone(UTC)
 
 
 def parse_decimal(value: object) -> Decimal:

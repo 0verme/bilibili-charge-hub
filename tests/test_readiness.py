@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.crypto import get_credential_cipher
 from app.database import get_engine, get_session_factory
 from app.main import create_app
-from app.models import JobKind, ScheduleJob
+from app.models import BiliAccount, ChargeRecord, JobKind, ScheduleJob
 from app.readiness import check_migration_readiness, get_code_heads
 from app.settings import get_settings
 
@@ -66,7 +66,7 @@ def test_migration_readiness_requires_exactly_one_matching_head(
         current = check_migration_readiness(engine)
         assert current.ready
         assert current.current_heads == current.expected_heads == (
-            "0003_single_instance_hardening",
+            "0004_fix_naive_charge_times",
         )
 
         code_multiple = check_migration_readiness(engine, expected_heads=("code-a", "code-b"))
@@ -104,7 +104,7 @@ def test_lagging_database_keeps_scheduler_stopped_and_readyz_fails_closed(
             assert response.json()["checks"]["migration"] == {
                 "status": "not_ready",
                 "current_heads": ["0002_dashboard_shares"],
-                "expected_heads": ["0003_single_instance_hardening"],
+                "expected_heads": ["0004_fix_naive_charge_times"],
                 "reason": "revision_mismatch",
             }
             assert response.json()["checks"]["scheduler"] == "unavailable"
@@ -136,7 +136,7 @@ def test_current_database_starts_scheduler_and_is_ready(
         clear_runtime_caches()
 
 
-def test_0002_to_0003_upgrade_preserves_existing_data(
+def test_0002_to_head_upgrade_preserves_existing_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "upgrade.sqlite3"
@@ -258,7 +258,7 @@ def test_0002_to_0003_upgrade_preserves_existing_data(
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == "0003_single_instance_hardening"
+            assert revision == "0004_fix_naive_charge_times"
         with Session(engine) as session:
             assert session.scalar(select(ScheduleJob).where(ScheduleJob.id == "job-keep")).kind == (
                 JobKind.CHARGE_COLLECTION
@@ -273,3 +273,62 @@ def test_0002_migration_does_not_import_live_models() -> None:
         encoding="utf-8"
     )
     assert "app.models" not in source
+
+
+def test_0004_corrects_legacy_naive_charge_times_and_watermark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "charge-time-upgrade.sqlite3"
+    upgrade_database(monkeypatch, path, "0003_single_instance_hardening")
+    engine = create_engine(database_url(path))
+    wrong_utc = datetime(2026, 8, 13, 22, 29, 31, tzinfo=UTC)
+    expected_utc = datetime(2026, 8, 13, 14, 29, 31, tzinfo=UTC)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """INSERT INTO users
+                    (id, username, password_hash, role, is_active, created_at, updated_at)
+                    VALUES ('user-time', 'time-owner', 'hash', 'admin', 1, :now, :now)"""
+                ),
+                {"now": wrong_utc},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO bili_accounts
+                    (id, user_id, bili_uid, display_name, status, encrypted_cookie,
+                     collection_watermark_at, created_at, updated_at)
+                    VALUES ('account-time', 'user-time', '123', 'UP', 'ACTIVE', 'cipher',
+                            :wrong_utc, :wrong_utc, :wrong_utc)"""
+                ),
+                {"wrong_utc": wrong_utc},
+            )
+            connection.execute(
+                text(
+                    """INSERT INTO charge_records
+                    (id, user_id, bili_account_id, event_id, supporter_uid, supporter_name,
+                     avatar_url, amount, brokerage, remark, charged_at, raw_data, created_at)
+                    VALUES ('charge-time', 'user-time', 'account-time', 'event-time', '456',
+                            'supporter', '', 5, 3.36, '', :wrong_utc, :raw_data, :wrong_utc)"""
+                ),
+                {
+                    "wrong_utc": wrong_utc,
+                    "raw_data": json.dumps(
+                        {"schema_version": 1, "ctime": "2026-08-13 22:29:31"}
+                    ),
+                },
+            )
+
+        upgrade_database(monkeypatch, path, "head")
+
+        with Session(engine) as session:
+            record = session.get(ChargeRecord, "charge-time")
+            account = session.get(BiliAccount, "account-time")
+            assert record is not None
+            assert account is not None
+            assert record.charged_at.replace(tzinfo=UTC) == expected_utc
+            assert account.collection_watermark_at is not None
+            assert account.collection_watermark_at.replace(tzinfo=UTC) == expected_utc
+    finally:
+        engine.dispose()
+        clear_runtime_caches()

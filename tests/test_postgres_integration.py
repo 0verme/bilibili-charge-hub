@@ -36,7 +36,7 @@ def test_postgres_schema_timezone_json_and_tenant_constraints(
     revision = postgres_session.execute(
         text("SELECT version_num FROM alembic_version")
     ).scalar_one()
-    assert revision == "0003_single_instance_hardening"
+    assert revision == "0004_fix_naive_charge_times"
 
     user = User(username="pg-owner", password_hash=hash_password("postgres-password-42"))
     postgres_session.add(user)
