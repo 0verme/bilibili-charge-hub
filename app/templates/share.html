@@ -1,1 +1,73 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>充电数据分享</title><link rel="stylesheet" href="/static/app.css"></head><body data-token="{{ token }}" data-password="{{ 'true' if password_required else 'false' }}"><main><h1>充电数据分享</h1><p id="state" class="muted"></p><section id="unlock" class="panel hidden"><h2>输入分享密码</h2><form id="unlock-form" class="form-grid"><input name="password" type="password" required><button>解锁</button></form></section><div id="content" class="hidden"><div id="cards" class="grid"></div><section class="panel records"><h2>最近充电</h2><table><thead><tr><th>用户</th><th>金额</th><th>时间</th></tr></thead><tbody></tbody></table></section></div></main><script src="/static/share.js" defer></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bilibili 充电驾驶舱</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/share.css">
+</head>
+<body class="share-page" data-token="{{ token }}" data-password="{{ 'true' if password_required else 'false' }}">
+  <main class="share-shell">
+    <header class="share-hero">
+      <div>
+        <span class="share-kicker"><i></i>Bilibili 充电数据监控</span>
+        <h1>Bilibili 充电驾驶舱</h1>
+        <p id="state" class="share-subtitle">正在读取充电数据…</p>
+      </div>
+      <div class="share-actions">
+        <span id="generated-at" class="generated-at"></span>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换明暗主题">◐ 暗色模式</button>
+      </div>
+    </header>
+
+    <section id="unlock" class="share-unlock hidden">
+      <span class="unlock-icon">🔐</span>
+      <div>
+        <h2>这份数据需要密码</h2>
+        <p>请输入分享人提供的密码查看驾驶舱。</p>
+        <form id="unlock-form" class="unlock-form">
+          <input name="password" type="password" placeholder="分享密码" autocomplete="current-password" required>
+          <button>解锁驾驶舱</button>
+        </form>
+      </div>
+    </section>
+
+    <div id="content" class="hidden">
+      <section id="cards" class="summary-grid" aria-label="充电数据摘要"></section>
+
+      <section class="share-panel trend-panel">
+        <div class="panel-heading">
+          <div><h2>充电趋势</h2><p>按日汇总充电金额</p></div>
+          <span class="legend"><i></i>充电金额</span>
+        </div>
+        <svg id="trend-chart" class="trend-chart" viewBox="0 0 1000 280" role="img" aria-label="充电金额趋势图"></svg>
+      </section>
+
+      <div class="share-columns">
+        <section class="share-panel">
+          <div class="panel-heading"><div><h2>贡献者排行</h2><p>按累计充电金额 Top 10</p></div></div>
+          <div id="supporter-ranking" class="ranking"></div>
+        </section>
+        <section class="share-panel">
+          <div class="panel-heading"><div><h2>月度充电</h2><p>按月份汇总</p></div></div>
+          <div id="monthly-bars" class="monthly-bars"></div>
+        </section>
+      </div>
+
+      <section class="share-panel records-panel">
+        <div class="panel-heading">
+          <div><h2>最新充电</h2><p id="record-count">最近充电记录</p></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>时间</th><th>用户</th><th>充电</th><th>实际到账</th></tr></thead>
+            <tbody id="recent-records"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/static/share.js" defer></script>
+</body>
+</html>

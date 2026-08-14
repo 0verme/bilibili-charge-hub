@@ -47,4 +47,14 @@ def test_share_script_formats_charge_time_in_application_timezone() -> None:
 
     assert script.status_code == 200
     assert "new Intl.DateTimeFormat('zh-CN'" in script.text
-    assert "formatTime(x.charged_at,d.timezone)" in script.text
+    assert "formatTime(item.charged_at,data.timezone)" in script.text
+
+
+def test_share_page_contains_dashboard_sections() -> None:
+    template = __import__("pathlib").Path("app/templates/share.html").read_text(encoding="utf-8")
+
+    assert "Bilibili 充电驾驶舱" in template
+    assert 'id="trend-chart"' in template
+    assert 'id="supporter-ranking"' in template
+    assert 'id="monthly-bars"' in template
+    assert 'id="recent-records"' in template
