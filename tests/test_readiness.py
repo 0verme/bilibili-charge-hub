@@ -65,9 +65,7 @@ def test_migration_readiness_requires_exactly_one_matching_head(
         upgrade_database(monkeypatch, path, "head")
         current = check_migration_readiness(engine)
         assert current.ready
-        assert current.current_heads == current.expected_heads == (
-            "0005_daily_task",
-        )
+        assert current.current_heads == current.expected_heads == ("0005_daily_task",)
 
         code_multiple = check_migration_readiness(engine, expected_heads=("code-a", "code-b"))
         assert not code_multiple.ready
@@ -243,18 +241,27 @@ def test_0002_to_head_upgrade_preserves_existing_data(
         assert "collection_watermark_at" in account_columns
         assert {"available_at", "error_type"} <= delivery_columns
         with engine.connect() as connection:
-            assert connection.execute(
-                text("SELECT encrypted_cookie FROM bili_accounts WHERE id = 'account-1'")
-            ).scalar_one() == "cookie-cipher"
+            assert (
+                connection.execute(
+                    text("SELECT encrypted_cookie FROM bili_accounts WHERE id = 'account-1'")
+                ).scalar_one()
+                == "cookie-cipher"
+            )
             assert connection.execute(
                 text("SELECT id FROM schedule_jobs ORDER BY id")
             ).scalars().all() == ["job-keep"]
-            assert connection.execute(
-                text("SELECT available_at FROM notification_deliveries WHERE id = 'delivery-1'")
-            ).scalar_one() is not None
-            assert connection.execute(
-                text("SELECT id FROM dashboard_shares WHERE id = 'share-1'")
-            ).scalar_one() == "share-1"
+            assert (
+                connection.execute(
+                    text("SELECT available_at FROM notification_deliveries WHERE id = 'delivery-1'")
+                ).scalar_one()
+                is not None
+            )
+            assert (
+                connection.execute(
+                    text("SELECT id FROM dashboard_shares WHERE id = 'share-1'")
+                ).scalar_one()
+                == "share-1"
+            )
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
@@ -313,9 +320,7 @@ def test_0004_corrects_legacy_naive_charge_times_and_watermark(
                 ),
                 {
                     "wrong_utc": wrong_utc,
-                    "raw_data": json.dumps(
-                        {"schema_version": 1, "ctime": "2026-08-13 22:29:31"}
-                    ),
+                    "raw_data": json.dumps({"schema_version": 1, "ctime": "2026-08-13 22:29:31"}),
                 },
             )
 
