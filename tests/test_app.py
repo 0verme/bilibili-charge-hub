@@ -43,11 +43,13 @@ def test_dashboard_script_localizes_scheduled_job_names() -> None:
 
 def test_share_script_formats_charge_time_in_application_timezone() -> None:
     with TestClient(create_app()) as client:
+        widgets = client.get("/static/dashboard-widgets.js")
         script = client.get("/static/share.js")
 
+    assert widgets.status_code == 200
     assert script.status_code == 200
-    assert "new Intl.DateTimeFormat('zh-CN'" in script.text
-    assert "formatTime(item.charged_at,data.timezone)" in script.text
+    assert "new Intl.DateTimeFormat('zh-CN'" in widgets.text
+    assert "widgets.formatTime(item.charged_at,data.timezone)" in script.text
 
 
 def test_share_page_contains_dashboard_sections() -> None:
@@ -58,3 +60,17 @@ def test_share_page_contains_dashboard_sections() -> None:
     assert 'id="supporter-ranking"' in template
     assert 'id="monthly-bars"' in template
     assert 'id="recent-records"' in template
+
+
+def test_internal_dashboard_uses_shared_widgets_and_pagination() -> None:
+    template = __import__("pathlib").Path("app/templates/dashboard.html").read_text(
+        encoding="utf-8"
+    )
+    script = __import__("pathlib").Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    assert "/static/dashboard-widgets.js" in template
+    assert 'id="supporter-ranking"' in template
+    assert 'id="monthly-bars"' in template
+    assert 'id="page-size"' in template
+    assert "item.remark||'—'" in script
+    assert "widgets.renderSummary" in script

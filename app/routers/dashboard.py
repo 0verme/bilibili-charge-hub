@@ -136,6 +136,20 @@ def dashboard_payload(
         .order_by(func.sum(base.c.amount).desc())
         .limit(10)
     ).all()
+
+    def record_view(item: ChargeRecord) -> dict[str, str]:
+        record = {
+            "id": item.id,
+            "uid": mask(item.supporter_uid) if mask_uids else item.supporter_uid,
+            "name": mask(item.supporter_name) if mask_names else item.supporter_name,
+            "amount": str(item.amount),
+            "brokerage": str(item.brokerage),
+            "charged_at": as_utc(item.charged_at).isoformat(),
+        }
+        if include_private_metadata:
+            record["remark"] = item.remark
+        return record
+
     payload = {
         "summary": {
             "today_amount": str(today_amount),
@@ -157,17 +171,7 @@ def dashboard_payload(
             }
             for uid, name, amount in top
         ],
-        "records": [
-            {
-                "id": item.id,
-                "uid": mask(item.supporter_uid) if mask_uids else item.supporter_uid,
-                "name": mask(item.supporter_name) if mask_names else item.supporter_name,
-                "amount": str(item.amount),
-                "brokerage": str(item.brokerage),
-                "charged_at": as_utc(item.charged_at).isoformat(),
-            }
-            for item in records
-        ],
+        "records": [record_view(item) for item in records],
         "pagination": {"page": page, "page_size": page_size, "total": total_count},
         "timezone": get_settings().app_timezone,
     }

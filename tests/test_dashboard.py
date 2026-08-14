@@ -51,6 +51,7 @@ def dashboard_env() -> Generator[tuple[TestClient, sessionmaker[Session]], None,
                         supporter_name="Alice",
                         amount=Decimal("10.00"),
                         brokerage=Decimal("7.00"),
+                        remark="Alice's note",
                         charged_at=datetime.now(UTC),
                     ),
                     ChargeRecord(
@@ -76,6 +77,8 @@ def test_dashboard_summary_filter_pagination_and_csv(dashboard_env) -> None:
     assert data["summary"]["platform_difference"] == "3.00"
     assert data["pagination"]["total"] == 1
     assert data["records"][0]["name"] == "Alice"
+    assert data["records"][0]["uid"] == "10001"
+    assert data["records"][0]["remark"] == "Alice's note"
     csv_response = client.get("/api/dashboard/export.csv")
     assert csv_response.status_code == 200
     assert "Alice" in csv_response.text and "Bob" in csv_response.text
@@ -97,9 +100,47 @@ def test_share_is_random_expiring_password_protected_and_masked(dashboard_env) -
     body = response.json()
     assert body["records"][0]["name"] not in {"Alice", "Bob"}
     assert body["records"][0]["uid"] not in {"10001", "10002"}
+    assert "remark" not in body["records"][0]
+    assert body["pagination"]["page_size"] == 20
     assert "accounts" not in body
     assert "latest_run" not in body
     assert f"Path=/api/share/{token}" in unlocked.headers["set-cookie"]
+
+
+def test_internal_dashboard_paginates_all_unmasked_records(dashboard_env) -> None:
+    client, factory = dashboard_env
+    with factory() as db:
+        user = db.query(User).filter_by(username="owner").one()
+        account = db.query(BiliAccount).filter_by(user_id=user.id).one()
+        db.add_all(
+            [
+                ChargeRecord(
+                    user_id=user.id,
+                    bili_account_id=account.id,
+                    event_id=f"paged-{index}",
+                    supporter_uid=f"3000{index}",
+                    supporter_name=f"Paged {index}",
+                    amount=Decimal("5.00"),
+                    brokerage=Decimal("3.36"),
+                    remark=f"note {index}",
+                    charged_at=datetime(2026, 8, 1 + index, tzinfo=UTC),
+                )
+                for index in range(3)
+            ]
+        )
+        db.commit()
+
+    first = client.get(
+        "/api/dashboard", params={"search": "Paged", "page": 1, "page_size": 2}
+    ).json()
+    second = client.get(
+        "/api/dashboard", params={"search": "Paged", "page": 2, "page_size": 2}
+    ).json()
+
+    assert first["pagination"] == {"page": 1, "page_size": 2, "total": 3}
+    assert [record["name"] for record in first["records"]] == ["Paged 2", "Paged 1"]
+    assert second["records"][0]["uid"] == "30000"
+    assert second["records"][0]["remark"] == "note 0"
 
 
 def test_dashboard_never_returns_other_tenant_records(dashboard_env) -> None:
