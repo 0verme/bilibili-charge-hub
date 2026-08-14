@@ -21,6 +21,7 @@ from app.routers.auth import router as auth_router
 from app.routers.auth import users_router
 from app.routers.charges import router as charges_router
 from app.routers.coupons import router as coupons_router
+from app.routers.daily_tasks import router as daily_tasks_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.jobs import router as jobs_router
 from app.routers.jobs import runs_router
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
     application.include_router(users_router)
     application.include_router(charges_router)
     application.include_router(coupons_router)
+    application.include_router(daily_tasks_router)
     application.include_router(dashboard_router)
     application.include_router(jobs_router)
     application.include_router(runs_router)
@@ -181,6 +183,7 @@ def create_app() -> FastAPI:
                 "idempotent_charge_storage",
                 "persistent_scheduling",
                 "monthly_coupon_claim",
+                "opt_in_daily_tasks",
                 "notification_plugins",
                 "reliable_notification_delivery",
                 "dashboard_and_csv_export",

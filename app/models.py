@@ -53,6 +53,7 @@ class JobKind(StrEnum):
     CHARGE_COLLECTION = "charge_collection"
     COUPON_CLAIM = "coupon_claim"
     NOTIFICATION_RETRY = "notification_retry"
+    DAILY_TASK = "daily_task"
 
 
 class RunStatus(StrEnum):
@@ -265,4 +266,62 @@ class DashboardShare(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     mask_names: Mapped[bool] = mapped_column(Boolean, default=True)
     mask_uids: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DailyTaskProfile(Base):
+    """Per-account daily-task configuration.
+
+    Donating coins is a consumptive action, so the task is disabled by default and
+    requires an explicit opt-in per account.
+    """
+
+    __tablename__ = "daily_task_profiles"
+    __table_args__ = (UniqueConstraint("bili_account_id", name="uq_daily_profile_account"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    bili_account_id: Mapped[str] = mapped_column(
+        ForeignKey("bili_accounts.id", ondelete="CASCADE"), index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    target_coins: Mapped[int] = mapped_column(Integer, default=2)
+    protected_coins: Mapped[int] = mapped_column(Integer, default=50)
+    select_like: Mapped[bool] = mapped_column(Boolean, default=False)
+    skip_when_lv6: Mapped[bool] = mapped_column(Boolean, default=True)
+    share_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    watch_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    support_up_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class DailyTaskRecord(Base):
+    """Daily-task execution result, one row per account per local day."""
+
+    __tablename__ = "daily_task_records"
+    __table_args__ = (
+        UniqueConstraint("bili_account_id", "task_date", name="uq_daily_record_account_date"),
+        Index("ix_daily_record_tenant_date", "user_id", "task_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    bili_account_id: Mapped[str] = mapped_column(
+        ForeignKey("bili_accounts.id", ondelete="CASCADE"), index=True
+    )
+    task_date: Mapped[str] = mapped_column(String(10), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    login_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    watch_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    share_done: Mapped[bool] = mapped_column(Boolean, default=False)
+    coins_donated: Mapped[int] = mapped_column(Integer, default=0)
+    target_coins: Mapped[int] = mapped_column(Integer, default=0)
+    balance_before: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    balance_after: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    share_video: Mapped[str] = mapped_column(Text, default="")
+    donated_videos: Mapped[list] = mapped_column(JSON, default=list)
+    message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

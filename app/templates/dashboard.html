@@ -87,6 +87,25 @@
         <div class="toolbar"><button id="bind">扫码绑定账号</button></div>
         <div id="qr" class="panel hidden"><h2>请使用哔哩哔哩扫码</h2><img class="qr" alt="Bilibili 登录二维码"><p class="muted"></p></div>
         <div id="account-list" class="grid"></div>
+        <section id="daily-task-panel" class="panel hidden">
+          <h2>每日任务配置</h2>
+          <p class="muted">投币会消耗硬币，且 B 站接口非官方；请在确认理解风险后启用。每日 01:30 自动执行。</p>
+          <form id="daily-task-form" class="form-grid">
+            <label class="check"><input type="checkbox" name="enabled">启用每日任务（观看/分享/投币赚经验）</label>
+            <label class="field">每日目标投币数（0-5）<input name="target_coins" type="number" min="0" max="5" value="2"></label>
+            <label class="field">保留硬币数（低于则跳过投币）<input name="protected_coins" type="number" min="0" value="50"></label>
+            <label class="check"><input type="checkbox" name="select_like">投币同时点赞</label>
+            <label class="check"><input type="checkbox" name="skip_when_lv6" checked>LV6 后跳过投币</label>
+            <label class="check"><input type="checkbox" name="share_enabled" checked>每日分享视频（+5 经验）</label>
+            <label class="check"><input type="checkbox" name="watch_enabled">每日观看视频（+5 经验）</label>
+            <label class="field">指定 UP UID（逗号分隔，可选）<input name="support_up_ids" placeholder="如 220893216, 1544070"></label>
+            <div class="form-actions">
+              <button type="button" id="daily-task-cancel" class="secondary">收起</button>
+              <button>保存配置</button>
+            </div>
+          </form>
+          <section class="panel records"><h3>最近执行记录</h3><table><thead><tr><th>日期</th><th>状态</th><th>投币</th><th>分享</th><th>观看</th><th>说明</th></tr></thead><tbody id="daily-task-records"></tbody></table></section>
+        </section>
       </section>
       <section id="jobs" class="view">
         <div id="job-list" class="grid"></div>

@@ -24,7 +24,7 @@ class JobInput(BaseModel):
     def exactly_one_trigger(self) -> "JobInput":
         if (self.interval_seconds is None) == (self.cron is None):
             raise ValueError("provide exactly one of interval_seconds or cron")
-        account_kinds = {JobKind.CHARGE_COLLECTION, JobKind.COUPON_CLAIM}
+        account_kinds = {JobKind.CHARGE_COLLECTION, JobKind.COUPON_CLAIM, JobKind.DAILY_TASK}
         if self.kind in account_kinds and self.bili_account_id is None:
             raise ValueError("this job kind requires bili_account_id")
         return self

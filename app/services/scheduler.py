@@ -25,6 +25,7 @@ from app.models import (
 from app.notifications.service import NotificationDeliveryService, enqueue_event
 from app.services.collection import ChargeCollectionService
 from app.services.coupon import CouponClaimService
+from app.services.daily_task import DailyTaskService
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,7 @@ class SchedulerManager:
                 handlers: dict[JobKind, Callable] = {
                     JobKind.CHARGE_COLLECTION: ChargeCollectionService(client).collect,
                     JobKind.COUPON_CLAIM: CouponClaimService(client).claim,
+                    JobKind.DAILY_TASK: DailyTaskService(client).run,
                 }
                 handler = handlers.get(job.kind)
                 if handler:

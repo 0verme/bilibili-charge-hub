@@ -24,6 +24,8 @@ EVENT_TYPES = {
     "coupon_claim_succeeded",
     "coupon_claim_failed",
     "scheduled_job_failed",
+    "daily_task_succeeded",
+    "daily_task_failed",
 }
 MAX_ATTEMPTS = 5
 
@@ -95,6 +97,8 @@ def render_message(event: NotificationOutbox) -> str:
         "coupon_claim_succeeded": "B 币券领取成功",
         "coupon_claim_failed": "B 币券领取失败",
         "scheduled_job_failed": "定时任务执行异常",
+        "daily_task_succeeded": "每日任务完成",
+        "daily_task_failed": "每日任务失败",
     }[event.event_type]
     details = " · ".join(f"{key}: {value}" for key, value in event.payload.items())
     return f"{title}\n{details}" if details else title
