@@ -39,3 +39,12 @@ def test_dashboard_script_localizes_scheduled_job_names() -> None:
     assert "charge_collection:'充电记录采集'" in script.text
     assert "coupon_claim:'B 币券领取'" in script.text
     assert "notification_retry:'通知失败重试'" in script.text
+
+
+def test_share_script_formats_charge_time_in_application_timezone() -> None:
+    with TestClient(create_app()) as client:
+        script = client.get("/static/share.js")
+
+    assert script.status_code == 200
+    assert "new Intl.DateTimeFormat('zh-CN'" in script.text
+    assert "formatTime(x.charged_at,d.timezone)" in script.text
