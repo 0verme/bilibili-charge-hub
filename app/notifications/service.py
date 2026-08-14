@@ -1,5 +1,6 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import select
@@ -14,6 +15,7 @@ from app.models import (
     NotificationSubscription,
 )
 from app.notifications.providers import NotificationProvider, provider_registry
+from app.settings import get_settings
 
 EVENT_TYPES = {
     "new_charge",
@@ -70,8 +72,24 @@ def enqueue_event(
 
 
 def render_message(event: NotificationOutbox) -> str:
+    if event.event_type == "new_charge":
+        supporter = str(event.payload.get("supporter") or "未知用户")
+        amount = str(event.payload.get("amount", "0"))
+        brokerage = str(event.payload.get("brokerage", "0"))
+        charged_at = str(event.payload.get("charged_at") or "未知时间")
+        try:
+            parsed = datetime.fromisoformat(charged_at.replace("Z", "+00:00"))
+            parsed = parsed.replace(tzinfo=parsed.tzinfo or UTC)
+            charged_at = parsed.astimezone(
+                ZoneInfo(get_settings().app_timezone)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+        return (
+            f"【{supporter}】 在 【{charged_at}】\n"
+            f"冲了 {amount}B币 实际到账 {brokerage} 元"
+        )
     title = {
-        "new_charge": "收到新的充电",
         "collection_failed": "充电记录采集失败",
         "cookie_expired": "B 站登录状态已失效",
         "coupon_claim_succeeded": "B 币券领取成功",

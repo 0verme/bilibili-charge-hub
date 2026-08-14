@@ -17,7 +17,12 @@ from app.models import (
     UserRole,
 )
 from app.notifications.providers import SendResult, validate_webhook_url
-from app.notifications.service import MAX_ATTEMPTS, NotificationDeliveryService, enqueue_event
+from app.notifications.service import (
+    MAX_ATTEMPTS,
+    NotificationDeliveryService,
+    enqueue_event,
+    render_message,
+)
 from app.routers.notifications import (
     mask_config,
     retry_delivery,
@@ -29,7 +34,7 @@ from app.security import hash_password
 
 class SuccessfulProvider:
     async def send(self, message: str, config: dict) -> SendResult:
-        assert "收到新的充电" in message
+        assert "冲了" in message
         return SendResult(True, "HTTP 200")
 
 
@@ -135,6 +140,25 @@ def test_tenant_dedupe_keys_do_not_collide(notification_db: Session) -> None:
     assert enqueue_event(notification_db, second.id, "cookie_expired", "account:1", {})
     notification_db.commit()
     assert notification_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 2
+
+
+def test_new_charge_message_matches_legacy_format() -> None:
+    event = NotificationOutbox(
+        user_id="user",
+        event_type="new_charge",
+        dedupe_key="charge:legacy-format",
+        payload={
+            "supporter": "娇羞大学长",
+            "amount": "5.00",
+            "brokerage": "3.36",
+            "charged_at": "2026-08-14T00:12:37+00:00",
+        },
+    )
+
+    assert render_message(event) == (
+        "【娇羞大学长】 在 【2026-08-14 08:12:37】\n"
+        "冲了 5.00B币 实际到账 3.36 元"
+    )
 
 
 def test_event_waits_for_a_channel_without_consuming_retry_budget(

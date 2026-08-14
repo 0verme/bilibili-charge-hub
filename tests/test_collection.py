@@ -20,6 +20,7 @@ from app.models import (
     BiliAccount,
     ChargeRecord,
     JobRun,
+    NotificationOutbox,
     RunStatus,
     User,
     UserRole,
@@ -109,6 +110,8 @@ def test_collection_paginates_and_is_idempotent(collection_db: Session) -> None:
     assert second.inserted == 0
     assert client.requested_pages == [1, 2, 1, 2]
     assert collection_db.scalar(select(func.count()).select_from(ChargeRecord)) == 2
+    events = list(collection_db.scalars(select(NotificationOutbox)))
+    assert {event.payload["brokerage"] for event in events} == {"7.00", "14.00"}
     runs = list(collection_db.scalars(select(JobRun).order_by(JobRun.started_at)))
     assert [run.status for run in runs] == [RunStatus.SUCCEEDED, RunStatus.SUCCEEDED]
     assert all(run.finished_at and run.duration_ms is not None for run in runs)

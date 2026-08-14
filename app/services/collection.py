@@ -168,6 +168,7 @@ class ChargeCollectionService:
                                 {
                                     "supporter": record.supporter_name,
                                     "amount": str(record.amount),
+                                    "brokerage": str(record.brokerage),
                                     "charged_at": record.charged_at.isoformat(),
                                 },
                             )
