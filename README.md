@@ -35,6 +35,9 @@ python -m venv .venv
 docker compose up -d
 ```
 
+生产环境默认拉取 `ghcr.io/0verme/bilibili-charge-hub:latest`。如需固定版本，设置
+`APP_IMAGE=ghcr.io/0verme/bilibili-charge-hub:<版本标签>` 后再启动。
+
 访问 `https://你的 APP_DOMAIN/login`。默认 Compose 使用 Caddy 自动申请和续期 TLS
 证书，应用端口只在容器网络内暴露；应用容器以非 root 用户运行，PostgreSQL 数据
 保存在命名卷中。不要提交 `.env`、Cookie、数据库文件、备份或日志。
@@ -44,6 +47,12 @@ docker compose up -d
 ```bash
 docker compose -f compose.yaml -f compose.dev.yaml up -d db app
 ```
+
+开发覆盖文件会使用当前仓库的 `Dockerfile` 构建应用镜像。
+
+镜像发布工作流在代码推送到 `main`、推送 `v*` 版本标签或手动触发时运行。首次发布后，
+如果部署服务器需要免登录拉取，请在 GitHub 的包设置中将容器包可见性改为 Public；私有包
+则需要在服务器上先登录 `ghcr.io`。
 
 > 当前版本只支持一个 app 副本和一个 Uvicorn worker。不要使用 `--workers` 或扩展 Compose app 副本，否则内存调度器可能重复执行任务。
 

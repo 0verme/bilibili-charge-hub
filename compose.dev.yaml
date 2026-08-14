@@ -3,6 +3,7 @@ services:
     profiles: ["production"]
 
   app:
+    build: .
     environment:
       APP_ENV: development
       FORWARDED_ALLOW_IPS: 127.0.0.1

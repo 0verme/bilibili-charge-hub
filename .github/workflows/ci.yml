@@ -41,7 +41,7 @@ jobs:
       - run: alembic check
         env:
           DATABASE_URL: postgresql+psycopg://charge_hub:charge_hub_test@127.0.0.1:5432/charge_hub_ci
-      - run: docker compose --env-file .env.example config --quiet
+      - run: docker compose --env-file .env.example -f compose.yaml -f compose.dev.yaml config --quiet
       - name: Prepare container smoke secrets
         run: |
           echo "APP_DOMAIN=localhost" >> "$GITHUB_ENV"
@@ -50,16 +50,16 @@ jobs:
           echo "CREDENTIAL_ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
       - name: Build and smoke-test the application container
         run: |
-          docker compose up -d --build db app
+          docker compose -f compose.yaml -f compose.dev.yaml up -d --build db app
           for attempt in $(seq 1 30); do
-            if docker compose exec -T app python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"; then
-              docker compose exec -T app python -c "import json, urllib.request; data=json.dumps({'username':'smoke-admin','password':'container-smoke-42'}).encode(); request=urllib.request.Request('http://127.0.0.1:8000/api/auth/setup', data=data, headers={'Content-Type':'application/json'}); assert urllib.request.urlopen(request, timeout=3).status == 201"
+            if docker compose -f compose.yaml -f compose.dev.yaml exec -T app python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"; then
+              docker compose -f compose.yaml -f compose.dev.yaml exec -T app python -c "import json, urllib.request; data=json.dumps({'username':'smoke-admin','password':'container-smoke-42'}).encode(); request=urllib.request.Request('http://127.0.0.1:8000/api/auth/setup', data=data, headers={'Content-Type':'application/json'}); assert urllib.request.urlopen(request, timeout=3).status == 201"
               exit 0
             fi
             sleep 2
           done
-          docker compose logs app db
+          docker compose -f compose.yaml -f compose.dev.yaml logs app db
           exit 1
       - name: Stop smoke-test containers
         if: always()
-        run: docker compose down --volumes --remove-orphans
+        run: docker compose -f compose.yaml -f compose.dev.yaml down --volumes --remove-orphans

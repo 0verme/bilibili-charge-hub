@@ -5,7 +5,7 @@
 1. 复制 `.env.example` 为 `.env`。
 2. 将 `APP_DOMAIN` 设置为已经解析到服务器公网 IP 的域名；开放 TCP 80/443。
 3. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
-4. 运行 `docker compose up -d`。应用容器启动时自动执行 `alembic upgrade head`，Caddy 自动配置 HTTPS。
+4. 运行 `docker compose pull` 和 `docker compose up -d`，默认拉取 GHCR 的 `latest` 镜像。应用容器启动时自动执行 `alembic upgrade head`，Caddy 自动配置 HTTPS。
 5. 打开 `https://你的 APP_DOMAIN/login`；系统会在没有启用管理员时自动进入初始化页，创建管理员后进入管理后台。
 
 应用端口默认不发布到宿主机，只能通过同一 Compose 网络中的 Caddy 访问。Caddy 是唯一
@@ -42,7 +42,7 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d db app
 
 1. 先备份数据库和当前 `.env`。
 2. 获取新版本代码并阅读发布说明。
-3. 执行 `docker compose build --pull` 和 `docker compose up -d`。
+3. 执行 `docker compose pull` 和 `docker compose up -d`。如需固定版本，先在 `.env` 中设置 `APP_IMAGE=ghcr.io/0verme/bilibili-charge-hub:<版本标签>`。
 4. 检查 `/healthz`、`/readyz`、容器日志和最近任务状态。迁移由应用启动命令执行；发生错误时不要跳过迁移或修改版本表。
 
 ## 安全说明
