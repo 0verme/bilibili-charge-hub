@@ -137,6 +137,40 @@ def test_tenant_dedupe_keys_do_not_collide(notification_db: Session) -> None:
     assert notification_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 2
 
 
+def test_event_waits_for_a_channel_without_consuming_retry_budget(
+    notification_db: Session,
+) -> None:
+    user = make_notification_user(notification_db)
+    event = enqueue_event(
+        notification_db,
+        user.id,
+        "new_charge",
+        "charge:before-channel",
+        {"supporter": "Alice", "amount": "10.00"},
+    )
+    assert event is not None
+    notification_db.commit()
+
+    service = NotificationDeliveryService(providers={"good": SuccessfulProvider()})
+    asyncio.run(service.deliver_event(notification_db, event))
+
+    notification_db.refresh(event)
+    assert event.status == "pending"
+    assert event.attempts == 0
+    assert notification_db.scalar(select(func.count()).select_from(NotificationDelivery)) == 0
+
+    channel = add_channel(notification_db, user, "later", "good")
+    assert asyncio.run(service.process_pending(notification_db, user.id)) == 1
+
+    notification_db.refresh(event)
+    delivery = notification_db.scalar(
+        select(NotificationDelivery).where(NotificationDelivery.channel_id == channel.id)
+    )
+    assert event.status == "delivered"
+    assert event.attempts == 1
+    assert delivery is not None and delivery.status == "succeeded"
+
+
 @pytest.mark.parametrize(
     "url",
     [

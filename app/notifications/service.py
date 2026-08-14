@@ -129,6 +129,10 @@ class NotificationDeliveryService:
                 NotificationChannel.enabled.is_(True),
             )
         ).all()
+        if not subscriptions:
+            event.status = "pending"
+            db.commit()
+            return
         successes = failures = 0
         for _subscription, channel in subscriptions:
             delivery = db.scalar(
@@ -170,7 +174,7 @@ class NotificationDeliveryService:
                     seconds=2**delivery.attempts * 30
                 )
         event.attempts += 1
-        if not subscriptions or failures == 0:
+        if failures == 0:
             event.status = "delivered"
         elif event.attempts >= MAX_ATTEMPTS:
             event.status = "failed"
