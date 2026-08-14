@@ -14,3 +14,12 @@ def test_production_requires_non_default_secrets() -> None:
 
     with pytest.raises(RuntimeError, match="APP_SECRET_KEY"):
         settings.validate_runtime_secrets()
+
+
+def test_collection_interval_accepts_twenty_seconds() -> None:
+    assert Settings(collection_interval_seconds=20).collection_interval_seconds == 20
+
+
+def test_collection_interval_rejects_less_than_twenty_seconds() -> None:
+    with pytest.raises(ValidationError):
+        Settings(collection_interval_seconds=19)

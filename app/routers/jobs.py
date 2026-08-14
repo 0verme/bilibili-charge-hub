@@ -16,7 +16,7 @@ runs_router = APIRouter(prefix="/api/job-runs", tags=["job-runs"])
 class JobInput(BaseModel):
     bili_account_id: str | None = None
     kind: JobKind
-    interval_seconds: int | None = Field(default=None, ge=60)
+    interval_seconds: int | None = Field(default=None, ge=20)
     cron: str | None = None
     enabled: bool = True
 
@@ -43,7 +43,7 @@ class JobView(BaseModel):
 
 
 class ScheduleUpdate(BaseModel):
-    interval_seconds: int | None = Field(default=None, ge=60)
+    interval_seconds: int | None = Field(default=None, ge=20)
     cron: str | None = None
 
     @model_validator(mode="after")
