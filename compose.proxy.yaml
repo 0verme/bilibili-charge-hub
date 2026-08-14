@@ -1,0 +1,10 @@
+services:
+  caddy:
+    profiles: ["bundled-proxy"]
+
+  app:
+    environment:
+      APP_ENV: production
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+    ports:
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-8000}:8000"

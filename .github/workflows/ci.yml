@@ -41,7 +41,11 @@ jobs:
       - run: alembic check
         env:
           DATABASE_URL: postgresql+psycopg://charge_hub:charge_hub_test@127.0.0.1:5432/charge_hub_ci
-      - run: docker compose --env-file .env.example -f compose.yaml -f compose.dev.yaml config --quiet
+      - name: Validate Compose configurations
+        run: |
+          docker compose --env-file .env.example config --quiet
+          docker compose --env-file .env.example -f compose.yaml -f compose.dev.yaml config --quiet
+          docker compose --env-file .env.example -f compose.yaml -f compose.proxy.yaml config --quiet
       - name: Prepare container smoke secrets
         run: |
           echo "APP_DOMAIN=localhost" >> "$GITHUB_ENV"

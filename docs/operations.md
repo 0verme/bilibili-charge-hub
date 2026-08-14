@@ -18,6 +18,17 @@
 docker compose -f compose.yaml -f compose.dev.yaml up -d db app
 ```
 
+使用飞牛等外部 HTTPS 反向代理时，必须改用 `compose.proxy.yaml`，不要叠加
+`compose.dev.yaml`：
+
+```bash
+docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
+```
+
+外部代理配置保持 `APP_ENV=production`，并通过 `FORWARDED_ALLOW_IPS` 信任代理转发的协议。
+代理容器或 Docker 网关地址可能在重建后变化，因此默认值为 `*`；应用端口应仅开放给反向
+代理或受信网络，可通过 `APP_BIND_ADDRESS` 限制监听地址。
+
 ## 备份与恢复
 
 使用仓库脚本创建 custom-format dump、内容清单和 SHA-256 校验文件：

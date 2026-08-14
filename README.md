@@ -50,6 +50,15 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d db app
 
 开发覆盖文件会使用当前仓库的 `Dockerfile` 构建应用镜像。
 
+使用飞牛等外部 HTTPS 反向代理时，不要使用开发覆盖文件；请运行：
+
+```bash
+docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
+```
+
+该配置保持生产 Cookie 策略，并信任代理传入的 HTTPS 转发头，避免把同源登录请求误判为
+跨域请求。可通过 `APP_BIND_ADDRESS` 和 `APP_PORT` 控制宿主机监听地址及端口。
+
 镜像发布工作流在代码推送到 `main`、推送 `v*` 版本标签或手动触发时运行。首次发布后，
 如果部署服务器需要免登录拉取，请在 GitHub 的包设置中将容器包可见性改为 Public；私有包
 则需要在服务器上先登录 `ghcr.io`。
