@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     credential_encryption_key: SecretStr | None = None
     collection_interval_seconds: int = Field(default=300, ge=20)
     retention_days: int = Field(default=90, ge=7)
+    notification_reconciliation_lookback_hours: int = Field(default=24, ge=1, le=168)
+    notification_reconciliation_max_records: int = Field(default=2000, ge=50)
 
     @field_validator("app_timezone")
     @classmethod

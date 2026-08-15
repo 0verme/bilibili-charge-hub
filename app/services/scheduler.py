@@ -26,6 +26,7 @@ from app.notifications.service import NotificationDeliveryService, enqueue_event
 from app.services.collection import ChargeCollectionService
 from app.services.coupon import CouponClaimService
 from app.services.daily_task import DailyTaskService
+from app.services.reconciliation import NotificationReconciliationService
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,14 @@ class SchedulerManager:
             self.cleanup_expired,
             trigger=IntervalTrigger(hours=24),
             id="system-maintenance",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+        self.scheduler.add_job(
+            self.run_notification_reconciliation,
+            trigger=IntervalTrigger(minutes=60),
+            id="notification-reconciliation",
             replace_existing=True,
             coalesce=True,
             max_instances=1,
@@ -162,6 +171,38 @@ class SchedulerManager:
                 db.scalars(select(ScheduleJob.id).where(ScheduleJob.bili_account_id == account_id))
             )
         return sum(self.remove_job(job_id) for job_id in job_ids)
+
+    async def run_notification_reconciliation(self) -> None:
+        """Periodic system job: repair silent notification gaps after interruptions.
+
+        Runs as an in-memory scheduler job (like cleanup) because reconciliation is
+        a cross-tenant system concern, not a per-user schedule. The audit summary is
+        written as structured logs; manual admin runs can also read it from the API.
+        """
+        started = datetime.now(UTC)
+        service = NotificationReconciliationService()
+        logger.info(
+            "notification_reconciliation_started",
+            extra={
+                "lookback_hours": service.lookback_hours,
+                "max_records": service.max_records,
+            },
+        )
+        try:
+            with self.factory() as db:
+                summary = service.run(db)
+            logger.info(
+                "notification_reconciliation_completed",
+                extra={
+                    **summary.to_dict(),
+                    "duration_ms": max(
+                        0, int((datetime.now(UTC) - started).total_seconds() * 1000)
+                    ),
+                },
+            )
+        except Exception:
+            logger.exception("notification_reconciliation_failed")
+            raise
 
     async def cleanup_expired(self) -> None:
         now = datetime.now(UTC)

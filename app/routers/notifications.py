@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app.auth import CurrentUser, DbSession
+from app.auth import AdminUser, CurrentUser, DbSession
 from app.crypto import get_credential_cipher
 from app.models import (
     JobKind,
@@ -21,6 +21,7 @@ from app.notifications.service import (
     enqueue_event,
     reset_delivery_for_retry,
 )
+from app.services.reconciliation import NotificationReconciliationService
 from app.services.scheduler import SchedulerManager
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
@@ -131,6 +132,19 @@ def get_scheduler(request: Request) -> SchedulerManager:
 
 
 SchedulerDep = Annotated[SchedulerManager, Depends(get_scheduler)]
+
+
+@router.post("/reconcile")
+def reconcile_notifications(admin: AdminUser, db: DbSession) -> dict:
+    """Manually trigger one notification reconciliation pass (admin only).
+
+    CSRF and same-origin protection are enforced by the global browser security
+    middleware for every authenticated write request; the service itself also
+    refuses to overlap with a concurrently running scheduled pass.
+    """
+    service = NotificationReconciliationService()
+    summary = service.run(db)
+    return summary.to_dict()
 
 
 @router.get("/channels", response_model=list[ChannelView])

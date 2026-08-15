@@ -74,6 +74,7 @@ async def browser_security(request: Request, call_next):
         "/api/auth/setup": (5, 300),
         "/api/auth/login": (10, 300),
         "/api/bili/qr-sessions": (10, 60),
+        "/api/notifications/reconcile": (2, 300),
     }.get(request.url.path)
     if request.url.path.startswith("/api/bili/accounts/") and request.url.path.endswith(
         "/collect"

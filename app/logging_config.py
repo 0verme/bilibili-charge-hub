@@ -13,6 +13,17 @@ FIELDS = (
     "run_id",
     "upstream_error",
     "retry_count",
+    "lookback_hours",
+    "max_records",
+    "scanned",
+    "missing_outbox",
+    "outbox_rebuilt",
+    "missing_deliveries",
+    "deliveries_created",
+    "requeued",
+    "already_complete",
+    "skipped",
+    "errors",
 )
 
 
