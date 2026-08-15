@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.crypto import get_credential_cipher
 from app.models import (
+    ChargeRecord,
     NotificationChannel,
     NotificationDelivery,
     NotificationOutbox,
@@ -48,6 +49,11 @@ def reset_delivery_for_retry(
     event.available_at = available_at
 
 
+def tenant_dedupe_key(user_id: str, dedupe_key: str) -> str:
+    """Scoped dedupe key that keeps identical event keys isolated per tenant."""
+    return hashlib.sha256(f"{user_id}|{dedupe_key}".encode()).hexdigest()
+
+
 def enqueue_event(
     db: Session,
     user_id: str,
@@ -57,11 +63,10 @@ def enqueue_event(
 ) -> NotificationOutbox | None:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unsupported notification event: {event_type}")
-    tenant_key = hashlib.sha256(f"{user_id}|{dedupe_key}".encode()).hexdigest()
     event = NotificationOutbox(
         user_id=user_id,
         event_type=event_type,
-        dedupe_key=tenant_key,
+        dedupe_key=tenant_dedupe_key(user_id, dedupe_key),
         payload=payload,
     )
     try:
@@ -71,6 +76,20 @@ def enqueue_event(
         return event
     except IntegrityError:
         return None
+
+
+def new_charge_payload(record: ChargeRecord) -> dict[str, str]:
+    """Build the new_charge event payload exactly as the collection flow does.
+
+    Reconciliation must reuse this builder so recovered notifications render with
+    the same template as freshly collected ones.
+    """
+    return {
+        "supporter": record.supporter_name,
+        "amount": str(record.amount),
+        "brokerage": str(record.brokerage),
+        "charged_at": record.charged_at.isoformat(),
+    }
 
 
 def render_message(event: NotificationOutbox) -> str:

@@ -15,7 +15,7 @@ from app.bilibili.client import (
 )
 from app.crypto import get_credential_cipher
 from app.models import AccountStatus, BiliAccount, ChargeRecord, JobRun, RunStatus, ScheduleJob
-from app.notifications.service import enqueue_event
+from app.notifications.service import enqueue_event, new_charge_payload
 
 PAGE_SIZE = 50
 MAX_PAGES = 100
@@ -165,12 +165,7 @@ class ChargeCollectionService:
                                 account.user_id,
                                 "new_charge",
                                 f"charge:{account.id}:{record.event_id}",
-                                {
-                                    "supporter": record.supporter_name,
-                                    "amount": str(record.amount),
-                                    "brokerage": str(record.brokerage),
-                                    "charged_at": record.charged_at.isoformat(),
-                                },
+                                new_charge_payload(record),
                             )
                         inserted += 1
                         page_inserted += 1
