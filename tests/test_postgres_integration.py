@@ -3,14 +3,23 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import BiliAccount, ChargeRecord, User
+from app.models import (
+    BiliAccount,
+    ChargeRecord,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationOutbox,
+    NotificationSubscription,
+    User,
+)
 from app.notifications.service import enqueue_event
 from app.readiness import get_code_heads
 from app.security import hash_password
+from app.services.reconciliation import NotificationReconciliationService
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(not POSTGRES_URL, reason="TEST_POSTGRES_URL is not configured")
@@ -92,3 +101,122 @@ def test_postgres_outbox_deduplication_is_transactional(postgres_session: Sessio
     duplicate = enqueue_event(postgres_session, user.id, "cookie_expired", "account:1", {})
     assert first is not None
     assert duplicate is None
+
+
+def _pg_account_and_charge(
+    session: Session, username: str, event_id: str
+) -> tuple[User, BiliAccount, ChargeRecord]:
+    user = User(username=username, password_hash=hash_password(f"postgres-{username}"))
+    session.add(user)
+    session.flush()
+    account = BiliAccount(
+        user_id=user.id,
+        bili_uid=f"uid-{username}",
+        encrypted_cookie="encrypted-placeholder",
+    )
+    session.add(account)
+    session.flush()
+    record = ChargeRecord(
+        user_id=user.id,
+        bili_account_id=account.id,
+        event_id=event_id,
+        supporter_uid="10001",
+        supporter_name="Alice",
+        amount=Decimal("10.50"),
+        brokerage=Decimal("7.00"),
+        charged_at=datetime(2026, 8, 13, 1, 2, 3, tzinfo=UTC),
+        raw_data={"schema_version": 1},
+    )
+    session.add(record)
+    session.flush()
+    return user, account, record
+
+
+def test_postgres_reconciliation_repairs_gaps_and_is_idempotent(
+    postgres_session: Session,
+) -> None:
+    user_a, account_a, record_a = _pg_account_and_charge(
+        postgres_session, "pg-recon-a", "pg-ev-a"
+    )
+    user_b, account_b, record_b = _pg_account_and_charge(
+        postgres_session, "pg-recon-b", "pg-ev-b"
+    )
+
+    for user, suffix in ((user_a, "a"), (user_b, "b")):
+        channel = NotificationChannel(
+            user_id=user.id,
+            name=f"pg-channel-{suffix}",
+            provider="webhook",
+            encrypted_config='{"url": "https://example.com/hook"}',
+        )
+        postgres_session.add(channel)
+        postgres_session.flush()
+        postgres_session.add(
+            NotificationSubscription(
+                user_id=user.id,
+                channel_id=channel.id,
+                event_type="new_charge",
+            )
+        )
+    postgres_session.flush()
+
+    service = NotificationReconciliationService()
+    summary = service.run(postgres_session)
+    assert summary.missing_outbox == 2
+    assert summary.outbox_rebuilt == 2
+    assert summary.deliveries_created == 2
+
+    second = service.run(postgres_session)
+    assert second.missing_outbox == 0
+    assert second.deliveries_created == 0
+
+    assert postgres_session.scalar(select(func.count()).select_from(NotificationOutbox)) == 2
+    assert postgres_session.scalar(select(func.count()).select_from(NotificationDelivery)) == 2
+    outboxes = list(postgres_session.scalars(select(NotificationOutbox)))
+    assert {outbox.user_id for outbox in outboxes} == {user_a.id, user_b.id}
+    deliveries = list(postgres_session.scalars(select(NotificationDelivery)))
+    by_outbox = {outbox.id: outbox for outbox in outboxes}
+    assert all(
+        delivery.user_id == by_outbox[delivery.outbox_id].user_id
+        for delivery in deliveries
+    )
+    assert {delivery.user_id for delivery in deliveries} == {user_a.id, user_b.id}
+    assert record_a.id and record_b.id
+
+
+def test_postgres_reconciliation_respects_delivery_unique_constraint(
+    postgres_session: Session,
+) -> None:
+    """A concurrent repair must not 500 and must not duplicate deliveries."""
+    user, _account, record = _pg_account_and_charge(
+        postgres_session, "pg-recon-race", "pg-ev-race"
+    )
+    channel = NotificationChannel(
+        user_id=user.id,
+        name="pg-race-channel",
+        provider="webhook",
+        encrypted_config='{"url": "https://example.com/hook"}',
+    )
+    postgres_session.add(channel)
+    postgres_session.flush()
+    postgres_session.add(
+        NotificationSubscription(
+            user_id=user.id,
+            channel_id=channel.id,
+            event_type="new_charge",
+        )
+    )
+    postgres_session.flush()
+
+    service = NotificationReconciliationService()
+    first = service.run(postgres_session)
+    # Simulate a racing second pass re-running while the first already committed:
+    # enqueue_event's tenant-scoped dedupe key and the (outbox_id, channel_id)
+    # unique constraint make the second run a no-op instead of an error.
+    second = service.run(postgres_session)
+
+    assert first.deliveries_created == 1
+    assert second.deliveries_created == 0
+    assert second.errors == 0
+    assert postgres_session.scalar(select(func.count()).select_from(NotificationOutbox)) == 1
+    assert postgres_session.scalar(select(func.count()).select_from(NotificationDelivery)) == 1
