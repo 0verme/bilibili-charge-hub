@@ -72,6 +72,44 @@ docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
 - 通知失败：查看 `notification_deliveries` 的状态和脱敏响应摘要；不要把完整 Token 打入日志。
 - Docker Hub 拉取失败：检查宿主机代理、DNS 和 Docker Desktop 网络后重试构建。
 
+## 通知对账（静默遗漏恢复）
+
+充电记录入库与通知投递是不同事务：进程、Docker 或数据库短暂中断后，可能出现充电记录已入库、但 `new_charge` 通知未被投递的静默缺口。系统每小时自动执行一次通知对账（系统任务 `notification-reconciliation`），管理员也可在通知中心手动触发 `POST /api/notifications/reconcile`（admin only，受 CSRF / 同源 / 频率限制保护）。
+
+### 什么时候会触发
+
+- 应用启动后由内存调度器每小时自动执行一次；
+- 管理员手动触发（并发时自动跳过，避免与定时任务重叠）。
+
+### 扫描范围与限制
+
+- 默认只扫描最近 24 小时入库的充电记录：`NOTIFICATION_RECONCILIATION_LOOKBACK_HOURS`（1–168，默认 24）；
+- 单次扫描上限：`NOTIFICATION_RECONCILIATION_MAX_RECORDS`（默认 2000），防止一次扫描无限数据；
+- 时间窗口按 UTC 计算，与 `APP_TIMEZONE` 展示无关。
+
+### 对账修复了什么
+
+1. 记录存在但 `new_charge` outbox 缺失 → 用与正常采集完全一致的 payload 和去重键补建；
+2. outbox 存在但订阅渠道缺投递记录 → 补建投递记录并交回现有投递链路；已投递的 outbox 因新增渠道被重入队（仅投递缺失渠道，成功记录永不重发）；
+3. 失败投递 → 尊重原有指数退避与 `MAX_ATTEMPTS` 预算，只审计不强制重发；预算耗尽的 outbox 同样只审计。
+
+### 查看结果
+
+每次执行的审计摘要以结构化日志输出，事件为 `notification_reconciliation_started` / `notification_reconciliation_completed` / `notification_reconciliation_failed`，字段包括 `scanned`、`missing_outbox`、`outbox_rebuilt`、`missing_deliveries`、`deliveries_created`、`requeued`、`already_complete`、`skipped`、`errors`、`duration_ms`：
+
+```bash
+docker compose logs app | grep notification_reconciliation_completed
+```
+
+手动触发接口直接返回同样的摘要 JSON。
+
+### 失败排查
+
+- `errors` 非零：检查对应日志中的 `reconciliation record failed`，通常是并发竞态（唯一约束冲突，已安全跳过）或数据库异常；
+- `skipped` 非零：多为投递预算耗尽的 outbox，可在通知中心对对应投递手动重试；
+- 长时间中断后缺口仍在：中断超过 lookback 窗口的部分不会被追溯，属预期行为；
+- 对账不会调用 Bilibili API，也不会修改充电记录、金额或用户归属。
+
 ## 部署限制与保留策略
 
 - 当前只支持单 app 副本、单 Uvicorn worker；不要横向扩容。
