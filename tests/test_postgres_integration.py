@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import BiliAccount, ChargeRecord, User
 from app.notifications.service import enqueue_event
+from app.readiness import get_code_heads
 from app.security import hash_password
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
@@ -36,7 +37,7 @@ def test_postgres_schema_timezone_json_and_tenant_constraints(
     revision = postgres_session.execute(
         text("SELECT version_num FROM alembic_version")
     ).scalar_one()
-    assert revision == "0004_fix_naive_charge_times"
+    assert (revision,) == get_code_heads()
 
     user = User(username="pg-owner", password_hash=hash_password("postgres-password-42"))
     postgres_session.add(user)

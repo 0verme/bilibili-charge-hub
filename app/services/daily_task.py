@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.bilibili.client import (
@@ -111,8 +112,32 @@ class DailyTaskService:
                 target_coins=profile.target_coins,
                 message="",
             )
-            db.add(record)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    db.add(record)
+                    db.flush()
+            except IntegrityError:
+                # A concurrent scheduled or manual run already created today's
+                # record; treat this run as an idempotent skip instead of a
+                # conflicting duplicate or a failed run.
+                db.rollback()
+                existing = db.scalar(
+                    select(DailyTaskRecord).where(
+                        DailyTaskRecord.bili_account_id == account.id,
+                        DailyTaskRecord.task_date == task_date,
+                    )
+                )
+                if existing is not None:
+                    return self._skip(
+                        run,
+                        task_date,
+                        "今日任务已完成（并发执行去重）",
+                        db,
+                        account,
+                        profile,
+                        existing=existing,
+                    )
+                raise
             record_id = record.id
 
             messages: list[str] = []
@@ -123,8 +148,10 @@ class DailyTaskService:
                 messages.append(msg)
 
             if profile.share_enabled and not record.share_done:
-                ok, _video, msg = await self._share_video(cookie, csrf, account, profile)
+                ok, video, msg = await self._share_video(cookie, csrf, account, profile)
                 record.share_done = ok
+                if ok and video is not None:
+                    record.share_video = video.bvid
                 messages.append(msg)
 
             donated, videos, msg = await self._donate_coins(

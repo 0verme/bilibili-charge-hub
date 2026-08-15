@@ -36,7 +36,7 @@ from app.models import (
     UserRole,
 )
 from app.security import hash_password
-from app.services.daily_task import DailyTaskService
+from app.services.daily_task import DailyTaskService, local_task_date
 
 
 class FakeDailyClient:
@@ -53,8 +53,11 @@ class FakeDailyClient:
             VideoInfo(aid="1001", bvid="BV1", title="video-1", cid="c1"),
             VideoInfo(aid="1002", bvid="BV2", title="video-2", cid="c2"),
         ]
-        self.ranking: list[VideoInfo] = []
+        self.ranking: list[VideoInfo] = [
+            VideoInfo(aid="2001", bvid="BV20", title="ranking-1", cid="c20"),
+        ]
         self.has_buvid3_flag = True
+        self.archive_coins: dict[str, int] = {}
 
     async def get_daily_task_reward(self, cookie_header: str) -> DailyTaskReward:
         self.calls.append("reward")
@@ -74,7 +77,7 @@ class FakeDailyClient:
 
     async def get_archive_coins(self, cookie_header: str, aid: str) -> int:
         self.calls.append(f"archive:{aid}")
-        return 0
+        return self.archive_coins.get(aid, 0)
 
     async def add_coin(
         self,
@@ -125,6 +128,18 @@ class ExpiredDailyClient(FakeDailyClient):
     async def get_daily_task_reward(self, cookie_header: str) -> DailyTaskReward:
         self.calls.append("reward")
         raise BilibiliAuthenticationError("expired")
+
+
+class EmptySearchDailyClient(FakeDailyClient):
+    """Configured UP search returns no videos, so the pool must fall back to followings."""
+
+    async def search_up_videos(
+        self, cookie_header: str, mid: str, page_number: int = 1, page_size: int = 30
+    ) -> tuple[list[VideoInfo], int]:
+        self.calls.append(f"search:{mid}")
+        if mid == 1111:
+            return [], 0
+        return list(self.up_videos), len(self.up_videos)
 
 
 @pytest.fixture
@@ -192,6 +207,8 @@ def test_daily_task_donates_coins_and_shares(
         assert len(record.donated_videos) == 2
         assert "投币" in record.message
         assert "分享" in record.message
+        # 分享成功后审计字段记录分享的视频
+        assert record.share_video in {"BV1", "BV2"}
         run = db.get(JobRun, outcome.run_id)
         assert run is not None and run.status == RunStatus.SUCCEEDED
         assert run.result["coins_donated"] == 2
@@ -217,6 +234,39 @@ def test_daily_task_is_idempotent_per_day(daily_db_factory: sessionmaker[Session
         runs = list(db.scalars(select(JobRun).order_by(JobRun.started_at)))
         assert [run.status for run in runs] == [RunStatus.SUCCEEDED, RunStatus.SKIPPED]
     assert client.calls.count("add:1001") + client.calls.count("add:1002") == 2
+
+
+def test_daily_task_concurrent_duplicate_becomes_idempotent_skip(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = FakeDailyClient()
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        # 模拟并发 scheduled/manual run 已抢先创建当日记录（尚未完成，status=running）。
+        concurrent = DailyTaskRecord(
+            user_id=account.user_id,
+            bili_account_id=account.id,
+            task_date=local_task_date(),
+            status="running",
+        )
+        db.add(concurrent)
+        db.commit()
+
+        outcome = asyncio.run(service.run(db, account))
+
+        assert outcome.status == "skipped"
+        assert "并发执行去重" in outcome.message
+        # 唯一约束保证同账号同自然日只存在一条记录
+        assert db.scalar(select(func.count()).select_from(DailyTaskRecord)) == 1
+        run = db.get(JobRun, outcome.run_id)
+        assert run is not None and run.status == RunStatus.SKIPPED
+        assert run.result["reason"] == "今日任务已完成（并发执行去重）"
+    # 并发冲突时不得重复投币/分享
+    assert not any(call.startswith("add:") for call in client.calls)
+    assert not any(call.startswith("share:") for call in client.calls)
 
 
 def test_daily_task_skips_when_profile_disabled(daily_db_factory: sessionmaker[Session]) -> None:
@@ -343,6 +393,137 @@ def test_daily_task_skips_when_coins_already_donated(
         assert record.status == "partial"
         assert "无需再投" in record.message
     assert not any(call.startswith("add:") for call in client.calls)
+
+
+def test_daily_task_target_coins_zero_skips_donating(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = FakeDailyClient()
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        profile = db.scalar(
+            select(DailyTaskProfile).where(DailyTaskProfile.bili_account_id == account_id)
+        )
+        assert profile is not None
+        profile.target_coins = 0
+        profile.share_enabled = False
+        db.commit()
+        outcome = asyncio.run(service.run(db, account))
+
+        record = db.get(DailyTaskRecord, outcome.record_id)
+        assert record is not None
+        assert record.coins_donated == 0
+        assert record.status == "partial"
+        assert "已配置为跳过" in record.message
+    assert not any(call.startswith("add:") for call in client.calls)
+
+
+def test_daily_task_skips_donating_when_lv6_and_skip_enabled(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = FakeDailyClient()
+    client.nav = NavInfo(mid="123456", uname="tester", level=6)
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        profile = db.scalar(
+            select(DailyTaskProfile).where(DailyTaskProfile.bili_account_id == account_id)
+        )
+        assert profile is not None
+        profile.share_enabled = False
+        db.commit()
+        outcome = asyncio.run(service.run(db, account))
+
+        record = db.get(DailyTaskRecord, outcome.record_id)
+        assert record is not None
+        assert record.coins_donated == 0
+        assert record.status == "partial"
+        assert "LV6" in record.message
+    assert not any(call.startswith("add:") for call in client.calls)
+
+
+def test_daily_task_skips_video_already_has_two_coins(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = FakeDailyClient()
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        profile = db.scalar(
+            select(DailyTaskProfile).where(DailyTaskProfile.bili_account_id == account_id)
+        )
+        assert profile is not None
+        profile.share_enabled = False
+        db.commit()
+        # 所有候选视频（含 ranking fallback）都已有 ≥2 枚硬币，投币保护应阻止继续投币
+        client.archive_coins = {aid: 2 for aid in ("1001", "1002", "2001")}
+        outcome = asyncio.run(service.run(db, account))
+
+        record = db.get(DailyTaskRecord, outcome.record_id)
+        assert record is not None
+        assert record.coins_donated == 0
+        assert "未能投出硬币" in record.message
+    assert not any(call.startswith("add:") for call in client.calls)
+
+
+def test_daily_task_falls_back_from_up_to_followings_when_up_has_no_videos(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = EmptySearchDailyClient()
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        profile = db.scalar(
+            select(DailyTaskProfile).where(DailyTaskProfile.bili_account_id == account_id)
+        )
+        assert profile is not None
+        profile.support_up_ids = [1111]
+        profile.share_enabled = False
+        db.commit()
+        outcome = asyncio.run(service.run(db, account))
+
+        record = db.get(DailyTaskRecord, outcome.record_id)
+        assert record is not None
+        assert record.coins_donated == 2
+        assert record.status == "success"
+    # 配置的 UP 搜索后回退到关注列表；ranking 不应被使用
+    assert "search:1111" in client.calls
+    assert "followings" in client.calls
+    assert "ranking" not in client.calls
+
+
+def test_daily_task_watch_task_reports_heartbeats(
+    daily_db_factory: sessionmaker[Session],
+) -> None:
+    account_id, _user_id = make_daily_account(daily_db_factory)
+    client = FakeDailyClient()
+    service = DailyTaskService(client)  # type: ignore[arg-type]
+    with daily_db_factory() as db:
+        account = db.get(BiliAccount, account_id)
+        assert account is not None
+        profile = db.scalar(
+            select(DailyTaskProfile).where(DailyTaskProfile.bili_account_id == account_id)
+        )
+        assert profile is not None
+        profile.watch_enabled = True
+        db.commit()
+        outcome = asyncio.run(service.run(db, account))
+
+        record = db.get(DailyTaskRecord, outcome.record_id)
+        assert record is not None
+        assert record.status == "success"
+        assert record.watch_done is True
+        assert "观看" in record.message
+    assert client.calls.count("heartbeat") == 2
 
 
 def test_client_add_coin_and_share_video_build_expected_requests() -> None:
