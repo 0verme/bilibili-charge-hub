@@ -119,6 +119,7 @@ class ChargeRecord(Base):
     __tablename__ = "charge_records"
     __table_args__ = (
         UniqueConstraint("bili_account_id", "event_id", name="uq_charge_account_event"),
+        UniqueConstraint("bili_account_id", "record_key", name="uq_charge_account_record_key"),
         Index("ix_charge_tenant_time", "user_id", "charged_at"),
     )
 
@@ -128,6 +129,8 @@ class ChargeRecord(Base):
         ForeignKey("bili_accounts.id", ondelete="CASCADE"), index=True
     )
     event_id: Mapped[str] = mapped_column(String(64))
+    record_key: Mapped[str] = mapped_column(String(64), index=True)
+    notification_eligible: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     supporter_uid: Mapped[str] = mapped_column(String(32), index=True)
     supporter_name: Mapped[str] = mapped_column(String(128), index=True)
     avatar_url: Mapped[str] = mapped_column(Text, default="")
@@ -211,6 +214,7 @@ class NotificationOutbox(Base):
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
+    merged_into_outbox_id: Mapped[str | None] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

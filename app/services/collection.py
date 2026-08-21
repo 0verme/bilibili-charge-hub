@@ -33,24 +33,42 @@ class CollectionResult:
     pages: int
     seen: int
     inserted: int
+    duplicates_skipped: int = 0
+    historical_suppressed: int = 0
 
 
-def stable_event_id(account_id: str, item: dict) -> str:
-    source_id = item.get("id") or item.get("orderNo") or item.get("tradeNo")
+def _source_id(item: dict) -> str | None:
+    for field_name in ("id", "orderNo", "tradeNo"):
+        value = item.get(field_name)
+        if value not in (None, ""):
+            return str(value).strip()
+    return None
+
+
+def stable_record_key(account_id: str, item: dict) -> str:
+    source_id = _source_id(item)
     if source_id:
         raw = f"{account_id}|source|{source_id}"
     else:
+        charged_at = parse_charge_time(item.get("ctime", item.get("charge_time")))
+        amount = parse_decimal(item.get("originalThirdCoin", item.get("amount", 0)))
+        brokerage = parse_decimal(item.get("brokerage", 0))
         raw = "|".join(
             str(value)
             for value in (
                 account_id,
                 item.get("mid", item.get("uid", "")),
-                item.get("name", item.get("nickname", "")),
-                item.get("originalThirdCoin", item.get("amount", "")),
-                item.get("ctime", item.get("charge_time", "")),
+                amount,
+                brokerage,
+                charged_at.isoformat(),
             )
         )
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def stable_event_id(account_id: str, item: dict) -> str:
+    """Return the stable event identifier used for newly collected records."""
+    return stable_record_key(account_id, item)
 
 
 def parse_charge_time(value: object) -> datetime:
@@ -87,6 +105,7 @@ def build_charge_record(account: BiliAccount, item: dict) -> ChargeRecord:
         user_id=account.user_id,
         bili_account_id=account.id,
         event_id=stable_event_id(account.id, item),
+        record_key=stable_record_key(account.id, item),
         supporter_uid=str(item.get("mid", item.get("uid", ""))),
         supporter_name=str(item.get("name", item.get("nickname", ""))),
         avatar_url=str(item.get("avatar", "")),
@@ -96,6 +115,27 @@ def build_charge_record(account: BiliAccount, item: dict) -> ChargeRecord:
         charged_at=parse_charge_time(item.get("ctime", item.get("charge_time"))),
         raw_data=raw_data,
     )
+
+
+def _is_uid_display_name(name: str, supporter_uid: str) -> bool:
+    return not name.strip() or name.strip() == supporter_uid
+
+
+def _enrich_existing_record(existing: ChargeRecord, incoming: ChargeRecord) -> None:
+    """Keep richer upstream metadata without letting it affect identity."""
+    existing_name_is_uid = _is_uid_display_name(existing.supporter_name, existing.supporter_uid)
+    incoming_name_is_uid = _is_uid_display_name(incoming.supporter_name, incoming.supporter_uid)
+    if existing_name_is_uid and not incoming_name_is_uid:
+        existing.supporter_name = incoming.supporter_name
+    if not existing.avatar_url and incoming.avatar_url:
+        existing.avatar_url = incoming.avatar_url
+    if not existing.remark and incoming.remark:
+        existing.remark = incoming.remark
+    merged_raw = dict(existing.raw_data or {})
+    for key, value in (incoming.raw_data or {}).items():
+        if key not in merged_raw or not merged_raw[key]:
+            merged_raw[key] = value
+    existing.raw_data = merged_raw
 
 
 class ChargeCollectionService:
@@ -131,11 +171,11 @@ class ChargeCollectionService:
         db.commit()
         db.refresh(run)
         started = datetime.now(UTC)
-        pages = seen = inserted = 0
+        pages = seen = inserted = duplicates_skipped = historical_suppressed = 0
         try:
             cookie = get_credential_cipher().decrypt(account.encrypted_cookie)
-            watermark = account.collection_watermark_at
-            newest_seen = watermark
+            previous_watermark = account.collection_watermark_at
+            newest_seen = previous_watermark
             consecutive_known_pages = 0
             for page_number in range(1, MAX_PAGES + 1):
                 page = await self.client.fetch_charge_page(cookie, page_number, PAGE_SIZE)
@@ -149,29 +189,44 @@ class ChargeCollectionService:
                     if newest_seen is None or record.charged_at > newest_seen:
                         newest_seen = record.charged_at
                     exists = db.scalar(
-                        select(ChargeRecord.id).where(
+                        select(ChargeRecord).where(
                             ChargeRecord.bili_account_id == account.id,
-                            ChargeRecord.event_id == record.event_id,
+                            ChargeRecord.record_key == record.record_key,
                         )
                     )
                     if exists:
+                        _enrich_existing_record(exists, record)
+                        duplicates_skipped += 1
                         continue
+                    record.notification_eligible = bool(
+                        previous_watermark is not None
+                        and record.charged_at > previous_watermark
+                    )
                     try:
                         with db.begin_nested():
                             db.add(record)
                             db.flush()
-                            enqueue_event(
-                                db,
-                                account.user_id,
-                                "new_charge",
-                                f"charge:{account.id}:{record.event_id}",
-                                new_charge_payload(record),
-                            )
+                            if record.notification_eligible:
+                                enqueue_event(
+                                    db,
+                                    account.user_id,
+                                    "new_charge",
+                                    f"charge:{account.id}:{record.event_id}",
+                                    new_charge_payload(record),
+                                )
+                            else:
+                                historical_suppressed += 1
                         inserted += 1
                         page_inserted += 1
                     except IntegrityError:
+                        duplicates_skipped += 1
                         pass
-                if page_inserted == 0 and watermark and page_times and max(page_times) <= watermark:
+                if (
+                    page_inserted == 0
+                    and previous_watermark
+                    and page_times
+                    and max(page_times) <= previous_watermark
+                ):
                     consecutive_known_pages += 1
                 else:
                     consecutive_known_pages = 0
@@ -180,8 +235,21 @@ class ChargeCollectionService:
             account.last_checked_at = datetime.now(UTC)
             account.collection_watermark_at = newest_seen
             run.status = RunStatus.SUCCEEDED
-            run.result = {"pages": pages, "seen": seen, "inserted": inserted}
-            return CollectionResult(run.id, pages, seen, inserted)
+            run.result = {
+                "pages": pages,
+                "seen": seen,
+                "inserted": inserted,
+                "duplicates_skipped": duplicates_skipped,
+                "historical_suppressed": historical_suppressed,
+            }
+            return CollectionResult(
+                run.id,
+                pages,
+                seen,
+                inserted,
+                duplicates_skipped,
+                historical_suppressed,
+            )
         except BilibiliAuthenticationError:
             account.status = AccountStatus.EXPIRED
             for job in db.scalars(

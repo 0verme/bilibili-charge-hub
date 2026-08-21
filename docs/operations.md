@@ -51,10 +51,12 @@ docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
 
 ## 升级与迁移
 
-1. 先备份数据库和当前 `.env`。
+1. 先备份数据库和当前 `.env`；包含充电记录去重迁移的版本必须确认备份可恢复。
 2. 获取新版本代码并阅读发布说明。
 3. 执行 `docker compose pull` 和 `docker compose up -d`。如需固定版本，先在 `.env` 中设置 `APP_IMAGE=ghcr.io/0verme/bilibili-charge-hub:<版本标签>`。
 4. 检查 `/healthz`、`/readyz`、容器日志和最近任务状态。迁移由应用启动命令执行；发生错误时不要跳过迁移或修改版本表。
+
+`0006_canonical_charge_keys` 会为历史充电记录生成稳定业务键，并将同一账号下的重复行合并为最早入库的主记录。主记录会尽量保留完整昵称、头像和备注；重复 outbox 标记为 `merged`，已有 `notification_deliveries` 发送审计保留，已发送的飞书消息不会撤回。迁移完成后应检查充电记录数量、`/readyz` 和通知日志；合并后的 outbox 不会进入自动重试。
 
 ## 安全说明
 
@@ -92,6 +94,7 @@ docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
 1. 记录存在但 `new_charge` outbox 缺失 → 用与正常采集完全一致的 payload 和去重键补建；
 2. outbox 存在但订阅渠道缺投递记录 → 补建投递记录并交回现有投递链路；已投递的 outbox 因新增渠道被重入队（仅投递缺失渠道，成功记录永不重发）；
 3. 失败投递 → 尊重原有指数退避与 `MAX_ATTEMPTS` 预算，只审计不强制重发；预算耗尽的 outbox 同样只审计。
+4. `notification_eligible=false` 的历史补录记录不会被对账任务补建 `new_charge` 通知；只有正常新充电记录参与对账。
 
 ### 查看结果
 

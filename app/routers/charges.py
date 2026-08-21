@@ -24,6 +24,8 @@ class CollectionResultView(BaseModel):
     pages: int
     seen: int
     inserted: int
+    duplicates_skipped: int
+    historical_suppressed: int
 
 
 @router.post("/{account_id}/collect", response_model=CollectionResultView)
@@ -69,4 +71,6 @@ async def collect_account(
         pages=result.pages,
         seen=result.seen,
         inserted=result.inserted,
+        duplicates_skipped=result.duplicates_skipped,
+        historical_suppressed=result.historical_suppressed,
     )

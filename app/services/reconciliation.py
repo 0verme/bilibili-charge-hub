@@ -109,7 +109,10 @@ class NotificationReconciliationService:
     ) -> ReconciliationSummary:
         summary = ReconciliationSummary()
         cutoff = now - timedelta(hours=self.lookback_hours)
-        query = select(ChargeRecord).where(ChargeRecord.created_at >= cutoff)
+        query = select(ChargeRecord).where(
+            ChargeRecord.created_at >= cutoff,
+            ChargeRecord.notification_eligible.is_(True),
+        )
         if user_id is not None:
             query = query.where(ChargeRecord.user_id == user_id)
         records = list(

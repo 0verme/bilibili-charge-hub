@@ -80,6 +80,7 @@ def make_charge(
         user_id=account.user_id,
         bili_account_id=account.id,
         event_id=event_id,
+        record_key=f"record:{event_id}",
         supporter_uid="10001",
         supporter_name="Alice",
         avatar_url="",
@@ -160,6 +161,22 @@ def test_r01_missing_outbox_is_rebuilt_exactly_once(reconciliation_db: Session) 
     assert outbox_count(reconciliation_db) == 1
     assert second.missing_outbox == 0 and second.outbox_rebuilt == 0
     assert second.errors == 0
+
+
+def test_r01_suppressed_historical_record_is_not_rebuilt(
+    reconciliation_db: Session,
+) -> None:
+    user = make_user(reconciliation_db, "r01-suppressed")
+    account = make_account(reconciliation_db, user)
+    record = make_charge(reconciliation_db, account, "evt-r01-suppressed")
+    record.notification_eligible = False
+    reconciliation_db.commit()
+
+    summary = run_reconciliation(reconciliation_db)
+
+    assert summary.scanned == 0
+    assert summary.outbox_rebuilt == 0
+    assert find_outbox(reconciliation_db, record) is None
 
 
 def test_r02_existing_outbox_is_never_duplicated(reconciliation_db: Session) -> None:

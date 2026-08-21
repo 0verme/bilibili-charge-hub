@@ -26,7 +26,12 @@ from app.models import (
     UserRole,
 )
 from app.security import hash_password
-from app.services.collection import ChargeCollectionService, parse_charge_time, stable_event_id
+from app.services.collection import (
+    ChargeCollectionService,
+    parse_charge_time,
+    stable_event_id,
+    stable_record_key,
+)
 
 
 class PagedChargeClient:
@@ -110,8 +115,9 @@ def test_collection_paginates_and_is_idempotent(collection_db: Session) -> None:
     assert second.inserted == 0
     assert client.requested_pages == [1, 2, 1, 2]
     assert collection_db.scalar(select(func.count()).select_from(ChargeRecord)) == 2
-    events = list(collection_db.scalars(select(NotificationOutbox)))
-    assert {event.payload["brokerage"] for event in events} == {"7.00", "14.00"}
+    assert first.historical_suppressed == 2
+    assert second.duplicates_skipped == 2
+    assert collection_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 0
     runs = list(collection_db.scalars(select(JobRun).order_by(JobRun.started_at)))
     assert [run.status for run in runs] == [RunStatus.SUCCEEDED, RunStatus.SUCCEEDED]
     assert all(run.finished_at and run.duration_ms is not None for run in runs)
@@ -142,6 +148,75 @@ def test_event_id_prefers_source_id_and_has_stable_fallback() -> None:
         "ctime": datetime(2026, 8, 12, tzinfo=UTC).isoformat(),
     }
     assert stable_event_id("account", item) == stable_event_id("account", dict(item))
+
+
+def test_record_key_ignores_unstable_name_and_normalizes_charge_time() -> None:
+    first = {
+        "mid": "11",
+        "name": "Alice",
+        "originalThirdCoin": "10.50",
+        "brokerage": "7.00",
+        "ctime": "2026-08-13 20:00:00",
+    }
+    later = {
+        "mid": "11",
+        "name": "11",
+        "originalThirdCoin": 10.5,
+        "brokerage": 7,
+        "ctime": "2026-08-13T12:00:00Z",
+    }
+
+    assert stable_record_key("account", first) == stable_record_key("account", later)
+
+
+def test_record_key_prefers_upstream_source_id() -> None:
+    first = {"id": "order-1", "mid": "11", "name": "Alice"}
+    later = {"id": "order-1", "mid": "99", "name": "changed"}
+
+    assert stable_record_key("account", first) == stable_record_key("account", later)
+
+
+def test_collection_notifies_only_records_after_existing_watermark(collection_db: Session) -> None:
+    account = make_account(collection_db)
+    account.collection_watermark_at = datetime(2026, 8, 12, tzinfo=UTC)
+    collection_db.commit()
+    service = ChargeCollectionService(PagedChargeClient())  # type: ignore[arg-type]
+
+    result = asyncio.run(service.collect(collection_db, account))
+
+    assert result.inserted == 2
+    assert result.historical_suppressed == 0
+    assert collection_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 2
+
+
+def test_collection_suppresses_late_historical_record(collection_db: Session) -> None:
+    account = make_account(collection_db)
+    account.collection_watermark_at = datetime(2026, 8, 20, tzinfo=UTC)
+    collection_db.commit()
+
+    class LateChargeClient:
+        async def fetch_charge_page(
+            self, cookie_header: str, page: int, page_size: int
+        ) -> ChargePage:
+            return ChargePage(
+                items=[
+                    {
+                        "mid": "11",
+                        "name": "11",
+                        "originalThirdCoin": "10.50",
+                        "brokerage": "7.00",
+                        "ctime": "2026-08-13T12:00:00Z",
+                    }
+                ],
+                has_more=False,
+            )
+
+    service = ChargeCollectionService(LateChargeClient())  # type: ignore[arg-type]
+    result = asyncio.run(service.collect(collection_db, account))
+
+    assert result.inserted == 1
+    assert result.historical_suppressed == 1
+    assert collection_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 0
 
 
 def test_charge_time_treats_naive_bilibili_time_as_shanghai_local_time() -> None:

@@ -327,6 +327,8 @@ def retry_delivery(delivery_id: str, user: CurrentUser, db: DbSession) -> dict[s
     event = db.get(NotificationOutbox, delivery.outbox_id)
     if event is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "notification event no longer exists")
+    if event.status == "merged":
+        raise HTTPException(status.HTTP_409_CONFLICT, "notification event was merged")
     reset_delivery_for_retry(delivery, event, datetime.now(UTC))
     db.commit()
     return {"status": "queued"}
