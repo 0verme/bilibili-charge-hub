@@ -20,6 +20,17 @@ def test_home_and_capabilities_are_available() -> None:
     assert response.json()["milestone"] == "M10-single-instance"
 
 
+def test_public_pages_link_to_github_project() -> None:
+    from pathlib import Path
+
+    expected_link = 'href="https://github.com/0verme/bilibili-charge-hub"'
+    for template_name in ("home.html", "share.html"):
+        template = Path("app/templates", template_name).read_text(encoding="utf-8")
+        assert expected_link in template
+        assert 'target="_blank"' in template
+        assert 'rel="noopener noreferrer"' in template
+
+
 def test_security_headers_and_api_cache_control() -> None:
     with TestClient(create_app()) as client:
         response = client.get("/healthz")
