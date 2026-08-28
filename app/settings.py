@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("sqlite:///./data/bilibili-charge-hub.sqlite3")
     app_secret_key: SecretStr = SecretStr("development-only-change-me")
     credential_encryption_key: SecretStr | None = None
+    admin_recovery_token: SecretStr | None = Field(default=None, min_length=32, max_length=256)
     collection_interval_seconds: int = Field(default=300, ge=20)
     retention_days: int = Field(default=90, ge=7)
     notification_reconciliation_lookback_hours: int = Field(default=24, ge=1, le=168)

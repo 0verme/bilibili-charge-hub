@@ -1,10 +1,20 @@
+import secrets
+
 from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 
 from app.auth import AdminUser, CurrentUser, DbSession, SessionToken, has_active_admin
 from app.errors import raise_api_error
 from app.models import User, UserRole, UserSession
-from app.schemas import Credentials, PasswordChange, PasswordReset, UserCreate, UserUpdate, UserView
+from app.schemas import (
+    AdminRecovery,
+    Credentials,
+    PasswordChange,
+    PasswordReset,
+    UserCreate,
+    UserUpdate,
+    UserView,
+)
 from app.security import (
     hash_password,
     hash_session_token,
@@ -87,6 +97,40 @@ def login(payload: Credentials, response: Response, db: DbSession) -> User:
     db.commit()
     set_session_cookie(response, token, csrf_token)
     return user
+
+
+@router.post("/recover", status_code=status.HTTP_204_NO_CONTENT)
+def recover_admin(payload: AdminRecovery, db: DbSession) -> None:
+    configured_token = get_settings().admin_recovery_token
+    if configured_token is None:
+        raise_api_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "recovery_disabled",
+            "administrator recovery is not configured",
+        )
+
+    token_valid = secrets.compare_digest(
+        payload.recovery_token,
+        configured_token.get_secret_value(),
+    )
+    user = db.scalar(
+        select(User).where(
+            User.username == payload.username,
+            User.role == UserRole.ADMIN,
+            User.is_active.is_(True),
+        )
+    )
+    if not token_valid or user is None:
+        raise_api_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "invalid_recovery",
+            "invalid recovery credentials",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    for stored in db.scalars(select(UserSession).where(UserSession.user_id == user.id)):
+        db.delete(stored)
+    db.commit()
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

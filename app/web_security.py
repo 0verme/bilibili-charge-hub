@@ -10,7 +10,7 @@ from app.errors import error_detail
 from app.security import hash_session_token
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-PUBLIC_WRITE_PATHS = {"/api/auth/setup", "/api/auth/login"}
+PUBLIC_WRITE_PATHS = {"/api/auth/setup", "/api/auth/login", "/api/auth/recover"}
 
 
 class SlidingWindowLimiter:
@@ -73,6 +73,7 @@ async def browser_security(request: Request, call_next):
     limited = {
         "/api/auth/setup": (5, 300),
         "/api/auth/login": (10, 300),
+        "/api/auth/recover": (5, 300),
         "/api/bili/qr-sessions": (10, 60),
         "/api/notifications/reconcile": (2, 300),
     }.get(request.url.path)

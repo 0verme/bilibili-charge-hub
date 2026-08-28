@@ -188,6 +188,7 @@ def create_app() -> FastAPI:
                 "reliable_notification_delivery",
                 "dashboard_and_csv_export",
                 "expiring_dashboard_shares",
+                "admin_password_recovery",
             ],
             "milestone": "M10-single-instance",
         }
@@ -207,6 +208,18 @@ def create_app() -> FastAPI:
         if not has_active_admin(db):
             return RedirectResponse("/setup", status_code=status.HTTP_303_SEE_OTHER)
         return templates.TemplateResponse(request=request, name="login.html")
+
+    @application.get("/reset", response_class=HTMLResponse, include_in_schema=False)
+    def reset_page(
+        request: Request,
+        db: DbSession,
+        session_token: SessionToken = None,
+    ) -> Response:
+        if get_optional_current_user(db, session_token):
+            return RedirectResponse("/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+        if not has_active_admin(db):
+            return RedirectResponse("/setup", status_code=status.HTTP_303_SEE_OTHER)
+        return templates.TemplateResponse(request=request, name="reset.html")
 
     @application.get("/setup", response_class=HTMLResponse, include_in_schema=False)
     def setup_page(
