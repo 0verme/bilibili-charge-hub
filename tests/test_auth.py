@@ -117,6 +117,8 @@ def test_auth_pages_route_by_initialization_and_session_state(client: TestClient
     assert reset_page.status_code == 200
     assert "重置管理员密码" in reset_page.text
     assert "ADMIN_RECOVERY_TOKEN" in reset_page.text
+    assert 'name="new_password"' in reset_page.text
+    assert 'name="new_password" type="password" required minlength="8"' not in reset_page.text
 
 
 def test_admin_recovery_requires_token_and_invalidates_sessions(
@@ -154,7 +156,7 @@ def test_admin_recovery_requires_token_and_invalidates_sessions(
             json={
                 "username": "owner",
                 "recovery_token": recovery_token,
-                "new_password": "new-password-42",
+                "new_password": "x",
             },
         )
         assert response.status_code == 204
@@ -171,7 +173,7 @@ def test_admin_recovery_requires_token_and_invalidates_sessions(
         assert (
             client.post(
                 "/api/auth/login",
-                json={"username": "owner", "password": "new-password-42"},
+                json={"username": "owner", "password": "x"},
             ).status_code
             == 200
         )
