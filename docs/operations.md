@@ -4,13 +4,19 @@
 
 1. 复制 `.env.example` 为 `.env`。
 2. 将 `APP_DOMAIN` 设置为已经解析到服务器公网 IP 的域名；开放 TCP 80/443。
-3. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥。
+3. 为 PostgreSQL 生成随机密码，为 `APP_SECRET_KEY` 生成至少 48 字节随机值，为 `CREDENTIAL_ENCRYPTION_KEY` 生成 Fernet 密钥；建议同时生成并保存 `ADMIN_RECOVERY_TOKEN`，用于管理员忘记密码时恢复。
 4. 运行 `docker compose pull` 和 `docker compose up -d`，默认拉取 GHCR 的 `latest` 镜像。应用容器启动时自动执行 `alembic upgrade head`，Caddy 自动配置 HTTPS。
 5. 打开 `https://你的 APP_DOMAIN/login`；系统会在没有启用管理员时自动进入初始化页，创建管理员后进入管理后台。
 
 应用端口默认不发布到宿主机，只能通过同一 Compose 网络中的 Caddy 访问。Caddy 是唯一
 可信代理，因此应用容器使用 `FORWARDED_ALLOW_IPS=*`；不要在修改 Compose、直接公开应用
 端口后继续使用该值。会话 Cookie 在生产环境带 `Secure`、`HttpOnly` 与 `SameSite=Lax`。
+
+### 管理员密码恢复
+
+在 `.env` 中配置长度至少 32 个字符的 `ADMIN_RECOVERY_TOKEN` 后，打开 `/reset`，输入管理员用户名、恢复令牌和新密码即可重置。恢复令牌只从环境变量读取，不写入数据库或日志；重置成功后，该管理员的所有已有会话都会失效。恢复入口按来源地址限流，且只允许重置启用状态的管理员。
+
+如果未配置 `ADMIN_RECOVERY_TOKEN`，恢复接口保持关闭；已有管理员仍可在后台“用户管理”中重置密码。
 
 仅限本机开发时，可通过 `compose.dev.yaml` 暴露 HTTP 端口并使用 development Cookie：
 

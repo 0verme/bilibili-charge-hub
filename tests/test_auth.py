@@ -8,8 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import create_app
-from app.models import Base, User, UserRole
+from app.models import Base, User, UserRole, UserSession
 from app.security import hash_password
+from app.settings import get_settings
 
 
 def enable_browser_writes(client: TestClient) -> None:
@@ -111,6 +112,100 @@ def test_auth_pages_route_by_initialization_and_session_state(client: TestClient
     response = client.get("/setup", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+    reset_page = client.get("/reset")
+    assert reset_page.status_code == 200
+    assert "重置管理员密码" in reset_page.text
+    assert "ADMIN_RECOVERY_TOKEN" in reset_page.text
+
+
+def test_admin_recovery_requires_token_and_invalidates_sessions(
+    client: TestClient,
+    db_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_token = "recovery-token-" + "x" * 40
+    monkeypatch.setenv("ADMIN_RECOVERY_TOKEN", recovery_token)
+    get_settings.cache_clear()
+    try:
+        original = {"username": "owner", "password": "old-password-42"}
+        assert client.post("/api/auth/setup", json=original).status_code == 201
+        first_session = client.cookies["session_token"]
+
+        client.cookies.clear()
+        assert client.post("/api/auth/login", json=original).status_code == 200
+        second_session = client.cookies["session_token"]
+        assert first_session != second_session
+        client.cookies.clear()
+
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": "wrong-token",
+                "new_password": "new-password-42",
+            },
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "invalid_recovery"
+
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": recovery_token,
+                "new_password": "new-password-42",
+            },
+        )
+        assert response.status_code == 204
+
+        with db_factory() as db:
+            user = db.scalar(select(User).where(User.username == "owner"))
+            assert user is not None
+            sessions = list(db.scalars(select(UserSession).where(UserSession.user_id == user.id)))
+            assert len(sessions) == 0
+
+        client.cookies.set("session_token", first_session)
+        assert client.get("/api/auth/me").status_code == 401
+        client.cookies.clear()
+        assert (
+            client.post(
+                "/api/auth/login",
+                json={"username": "owner", "password": "new-password-42"},
+            ).status_code
+            == 200
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_admin_recovery_is_disabled_without_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADMIN_RECOVERY_TOKEN", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert (
+            client.post(
+                "/api/auth/setup",
+                json={"username": "owner", "password": "old-password-42"},
+            ).status_code
+            == 201
+        )
+        client.cookies.clear()
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": "unused-token",
+                "new_password": "new-password-42",
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "recovery_disabled"
+    finally:
+        get_settings.cache_clear()
 
 
 def test_setup_reopens_when_all_admins_are_disabled(

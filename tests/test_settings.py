@@ -23,3 +23,10 @@ def test_collection_interval_accepts_twenty_seconds() -> None:
 def test_collection_interval_rejects_less_than_twenty_seconds() -> None:
     with pytest.raises(ValidationError):
         Settings(collection_interval_seconds=19)
+
+
+def test_admin_recovery_token_requires_minimum_length() -> None:
+    with pytest.raises(ValidationError):
+        Settings(admin_recovery_token="too-short")
+
+    assert Settings(admin_recovery_token="r" * 32).admin_recovery_token is not None
