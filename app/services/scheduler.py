@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from asyncio import CancelledError
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -252,6 +253,9 @@ class SchedulerManager:
                     run = JobRun(
                         user_id=job.user_id,
                         schedule_job_id=job.id,
+                        bili_account_id=job.bili_account_id,
+                        trigger_type="scheduled",
+                        scheduled_at=datetime.now(UTC),
                         status=RunStatus.QUEUED,
                         started_at=datetime.now(UTC),
                     )
@@ -261,8 +265,13 @@ class SchedulerManager:
                 if job.kind == JobKind.NOTIFICATION_RETRY:
                     delivery = NotificationDeliveryService()
                     try:
-                        await delivery.process_pending(db, job.user_id)
-                        self._finish_queued_run(db, run_id)
+                        result = await delivery.process_pending_summary(db, job.user_id)
+                        result["conclusion"] = (
+                            "扫描 0 条，无需重试"
+                            if not result["retried"]
+                            else f"已重试 {result['retried']} 个通知事件"
+                        )
+                        self._finish_queued_run(db, run_id, result=result)
                     finally:
                         await delivery.close()
                     return
@@ -291,7 +300,7 @@ class SchedulerManager:
                     await handler(db, account, job.id, run_id=run_id)
                 else:
                     self._finish_queued_run(db, run_id, "unsupported job kind")
-        except asyncio.CancelledError:
+        except CancelledError:
             self._fail_run(run_id, "run interrupted during shutdown")
             raise
         except Exception:
@@ -333,6 +342,7 @@ class SchedulerManager:
             if run and run.status in {RunStatus.QUEUED, RunStatus.RUNNING}:
                 finished_at = datetime.now(UTC)
                 run.status = RunStatus.FAILED
+                run.error_type = "scheduler_error"
                 run.error = error
                 run.finished_at = finished_at
                 started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
@@ -374,13 +384,25 @@ class SchedulerManager:
             db.commit()
 
     @staticmethod
-    def _finish_queued_run(db: Session, run_id: str | None, error: str | None = None) -> None:
+    def _finish_queued_run(
+        db: Session,
+        run_id: str | None,
+        error: str | None = None,
+        result: dict | None = None,
+    ) -> None:
         if not run_id:
             return
         run = db.get(JobRun, run_id)
         if run and run.status == RunStatus.QUEUED:
             run.status = RunStatus.FAILED if error else RunStatus.SUCCEEDED
             run.error = error
+            run.result = result or {}
             run.finished_at = datetime.now(UTC)
-            run.duration_ms = 0
+            started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
+            try:
+                run.duration_ms = max(
+                    0, int((run.finished_at - started_at).total_seconds() * 1000)
+                )
+            except (TypeError, ValueError, OverflowError):
+                run.duration_ms = 0
             db.commit()

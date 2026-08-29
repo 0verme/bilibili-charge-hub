@@ -217,6 +217,8 @@ async def run_job_now(
     run = JobRun(
         user_id=user.id,
         schedule_job_id=job_id,
+        bili_account_id=stored_job.bili_account_id,
+        trigger_type="manual",
         status=RunStatus.QUEUED,
         started_at=datetime.now(UTC),
     )
@@ -243,33 +245,82 @@ def delete_job(
 class JobRunView(BaseModel):
     id: str
     schedule_job_id: str | None
+    task_key: str | None = None
+    task_name: str | None = None
+    account: JobAccountView | None = None
+    trigger_type: str
+    scheduled_at: datetime | None
     status: RunStatus
     started_at: datetime
     finished_at: datetime | None
     duration_ms: int | None
     result: dict
+    error_type: str | None
     error: str | None
 
-    model_config = {"from_attributes": True}
+
+def run_view(db: DbSession, run: JobRun) -> JobRunView:
+    job = db.get(ScheduleJob, run.schedule_job_id) if run.schedule_job_id else None
+    account = db.get(BiliAccount, run.bili_account_id) if run.bili_account_id else None
+    task_names = {
+        JobKind.CHARGE_COLLECTION: "充电记录采集",
+        JobKind.DAILY_TASK: "每日任务",
+        JobKind.NOTIFICATION_RETRY: "通知失败重试",
+        JobKind.COUPON_CLAIM: "B 币券领取",
+    }
+    return JobRunView(
+        id=run.id, schedule_job_id=run.schedule_job_id,
+        task_key=job.kind.value if job else None,
+        task_name=task_names.get(job.kind, job.kind.value) if job else "系统任务",
+        account=(JobAccountView(id=account.id, display_name=account.display_name,
+                                bili_uid=account.bili_uid, status=account.status.value)
+                 if account else None),
+        trigger_type=run.trigger_type, scheduled_at=run.scheduled_at,
+        status=run.status, started_at=run.started_at, finished_at=run.finished_at,
+        duration_ms=run.duration_ms, result=run.result or {},
+        error_type=run.error_type, error=run.error,
+    )
 
 
 @runs_router.get("", response_model=list[JobRunView])
-def list_job_runs(user: CurrentUser, db: DbSession, limit: int = 100) -> list[JobRun]:
-    return list(
-        db.scalars(
-            select(JobRun)
-            .where(JobRun.user_id == user.id)
-            .order_by(JobRun.started_at.desc())
-            .limit(min(max(limit, 1), 200))
-        )
-    )
+def list_job_runs(
+    user: CurrentUser, db: DbSession, limit: int = 100,
+    account_id: str | None = None, kind: JobKind | None = None,
+    status: RunStatus | None = None, trigger_type: str | None = None,
+    started_after: datetime | None = None, started_before: datetime | None = None,
+    changed_only: bool = False,
+) -> list[JobRunView]:
+    query = select(JobRun).where(JobRun.user_id == user.id)
+    if account_id:
+        query = query.where(JobRun.bili_account_id == account_id)
+    if status:
+        query = query.where(JobRun.status == status)
+    if trigger_type:
+        query = query.where(JobRun.trigger_type == trigger_type)
+    if started_after:
+        query = query.where(JobRun.started_at >= started_after)
+    if started_before:
+        query = query.where(JobRun.started_at <= started_before)
+    if kind:
+        query = query.join(
+            ScheduleJob, JobRun.schedule_job_id == ScheduleJob.id
+        ).where(ScheduleJob.kind == kind)
+    runs = list(db.scalars(query.order_by(JobRun.started_at.desc()).limit(min(max(limit, 1), 200))))
+    if changed_only:
+        runs = [
+            r for r in runs
+            if not (r.result or {}).get("no_op") and any(
+                v for k, v in (r.result or {}).items()
+                if k not in {"no_op", "conclusion"}
+                and isinstance(v, (int, float))
+            )
+        ]
+    return [run_view(db, run) for run in runs]
 
 
 @runs_router.get("/{run_id}", response_model=JobRunView)
-def get_job_run(run_id: str, user: CurrentUser, db: DbSession) -> JobRun:
-    run = db.scalar(
-        select(JobRun).where(JobRun.id == run_id, JobRun.user_id == user.id)
-    )
+def get_job_run(run_id: str, user: CurrentUser, db: DbSession) -> JobRunView:
+    run = db.scalar(select(JobRun).where(JobRun.id == run_id, JobRun.user_id == user.id))
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job run not found")
-    return run
+    return run_view(db, run)

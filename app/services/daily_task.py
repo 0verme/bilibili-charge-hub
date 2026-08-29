@@ -165,13 +165,19 @@ class DailyTaskService:
             record.message = "；".join(m for m in messages if m)
             completed = record.watch_done or record.share_done or donated > 0
             record.status = "success" if completed else "partial"
-            run.status = RunStatus.SUCCEEDED
+            run.status = RunStatus.SUCCEEDED if completed else RunStatus.PARTIAL_SUCCESS
             run.result = {
                 "status": record.status,
                 "task_date": task_date,
+                "scanned_users": 1,
+                "new_count": 1,
+                "state_changes": int(record.watch_done) + int(record.share_done) + int(donated > 0),
+                "notifications_generated": 1,
+                "deliveries": 0,
                 "coins_donated": donated,
                 "watch_done": record.watch_done,
                 "share_done": record.share_done,
+                "conclusion": record.message or "每日任务已完成",
             }
             event_type = "daily_task_succeeded" if completed else "daily_task_failed"
             enqueue_event(
@@ -196,6 +202,7 @@ class DailyTaskService:
                 job.enabled = False
                 job.next_run_at = None
             run.status = RunStatus.FAILED
+            run.error_type = "authentication_expired"
             run.error = "Bilibili account authentication expired"
             enqueue_event(
                 db,
@@ -214,6 +221,7 @@ class DailyTaskService:
             raise
         except Exception as exc:
             run.status = RunStatus.FAILED
+            run.error_type = type(exc).__name__
             run.error = str(exc)[:1000]
             raise
         finally:
@@ -243,8 +251,15 @@ class DailyTaskService:
     ) -> JobRun:
         run = db.get(JobRun, run_id) if run_id else None
         if run is None:
-            run = JobRun(user_id=account.user_id, schedule_job_id=schedule_job_id)
+            run = JobRun(
+                user_id=account.user_id,
+                schedule_job_id=schedule_job_id,
+                bili_account_id=account.id,
+                trigger_type="manual" if schedule_job_id is None else "scheduled",
+            )
             db.add(run)
+        else:
+            run.bili_account_id = account.id
         run.status = RunStatus.RUNNING
         run.started_at = datetime.now(UTC)
         db.commit()
