@@ -66,7 +66,9 @@ def test_migration_readiness_requires_exactly_one_matching_head(
         upgrade_database(monkeypatch, path, "head")
         current = check_migration_readiness(engine)
         assert current.ready
-        assert current.current_heads == current.expected_heads == ("0006_canonical_charge_keys",)
+        assert current.current_heads == current.expected_heads == (
+            "0007_repeatable_dashboard_shares",
+        )
 
         code_multiple = check_migration_readiness(engine, expected_heads=("code-a", "code-b"))
         assert not code_multiple.ready
@@ -103,7 +105,7 @@ def test_lagging_database_keeps_scheduler_stopped_and_readyz_fails_closed(
             assert response.json()["checks"]["migration"] == {
                 "status": "not_ready",
                 "current_heads": ["0002_dashboard_shares"],
-                "expected_heads": ["0006_canonical_charge_keys"],
+                "expected_heads": ["0007_repeatable_dashboard_shares"],
                 "reason": "revision_mismatch",
             }
             assert response.json()["checks"]["scheduler"] == "unavailable"
@@ -266,7 +268,7 @@ def test_0002_to_head_upgrade_preserves_existing_data(
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == "0006_canonical_charge_keys"
+            assert revision == "0007_repeatable_dashboard_shares"
         with Session(engine) as session:
             assert session.scalar(select(ScheduleJob).where(ScheduleJob.id == "job-keep")).kind == (
                 JobKind.CHARGE_COLLECTION

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     app_timezone: str = "Asia/Shanghai"
     database_url: SecretStr = SecretStr("sqlite:///./data/bilibili-charge-hub.sqlite3")
     app_secret_key: SecretStr = SecretStr("development-only-change-me")
+    public_base_url: str | None = None
     credential_encryption_key: SecretStr | None = None
     collection_interval_seconds: int = Field(default=300, ge=20)
     retention_days: int = Field(default=90, ge=7)

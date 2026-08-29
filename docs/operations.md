@@ -63,7 +63,8 @@ docker compose -f compose.yaml -f compose.proxy.yaml up -d app db
 - 真实 Cookie 和通知凭据使用 Fernet 加密存储，API 和页面只返回元数据或掩码；当前不保存 refresh token。
 - 系统用户只能查询带自身 `user_id` 的账号、记录、任务、渠道与券领取数据；管理员也不会获得其他用户明文凭据。
 - 通用 Webhook 禁止非 HTTP(S) 协议、危险方法/请求头、本机、私网、链路本地和云元数据目标，并在发送前复核 DNS 解析结果。
-- 分享链接只读，Token 随机生成且数据库仅存摘要；密码通过 POST 换取短期 HttpOnly 访问 Cookie。
+- 分享链接只读；新链接使用 share id + `APP_SECRET_KEY` 的 HMAC 派生，可在有效期内从管理页重复复制，数据库不保存 bearer Token 明文。旧的 hash-only 链接会标记为 legacy，需在有效期内重新生成；密码通过 POST 换取短期 HttpOnly 访问 Cookie。
+- 生产环境建议设置 `PUBLIC_BASE_URL` 为外部访问地址，避免反向代理内部 Host 被用于生成分享 URL。
 - Bilibili Web 接口并非稳定的官方开放 API，可能变化、限流或触发风控。默认采集周期为 5 分钟；客户端只对 429、5xx 和网络错误做有限退避重试。
 - 系统只检查并领取会员 B 币券，不会自动消费或自动为 UP 主充电。
 

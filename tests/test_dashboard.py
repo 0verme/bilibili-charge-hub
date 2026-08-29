@@ -10,8 +10,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import create_app
-from app.models import Base, BiliAccount, ChargeRecord, DashboardShare, User
+from app.models import Base, BiliAccount, ChargeRecord, DashboardShare, User, new_id
 from app.routers.dashboard import issue_share_access, validate_share_access
+from app.security import hash_session_token
 
 
 @pytest.fixture
@@ -107,6 +108,67 @@ def test_share_is_random_expiring_password_protected_and_masked(dashboard_env) -
     assert "accounts" not in body
     assert "latest_run" not in body
     assert f"Path=/api/share/{token}" in unlocked.headers["set-cookie"]
+
+
+def test_share_url_is_repeatable_and_revocation_is_immediate(dashboard_env) -> None:
+    client, _ = dashboard_env
+    created = client.post("/api/dashboard/shares", json={}).json()
+    listed = client.get("/api/dashboard/shares").json()
+    item = next(share for share in listed if share["id"])
+    assert item["share_url"] == created["share_url"]
+    assert item["active"] is True
+    assert "/share/" in item["share_url"]
+    assert client.get(item["share_url"]).status_code == 200
+
+    assert client.delete(f"/api/dashboard/shares/{item['id']}").status_code == 204
+    revoked = next(
+        share for share in client.get("/api/dashboard/shares").json()
+        if share["id"] == item["id"]
+    )
+    assert revoked["active"] is False
+    assert revoked["share_url"] is None
+    assert client.get(item["share_url"]).status_code == 404
+
+
+def test_expired_and_legacy_shares_do_not_expose_access_urls(dashboard_env) -> None:
+    client, factory = dashboard_env
+    with factory() as db:
+        user = db.query(User).filter_by(username="owner").one()
+        legacy_token = "legacy-random-token"
+        db.add(DashboardShare(
+            id=new_id(), user_id=user.id, token_hash=hash_session_token(legacy_token),
+            password_hash=None, expires_at=datetime.now(UTC) + timedelta(hours=1),
+            mask_names=True, mask_uids=True,
+        ))
+        db.add(DashboardShare(
+            id=new_id(), user_id=user.id, token_hash=hash_session_token("expired-token"),
+            password_hash=None, expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            mask_names=True, mask_uids=True,
+        ))
+        db.commit()
+    shares = client.get("/api/dashboard/shares").json()
+    legacy = next(share for share in shares if share["legacy"])
+    expired = next(
+        share for share in shares
+        if not share["active"] and share["id"] != legacy["id"]
+    )
+    assert legacy["share_url"] is None and legacy["active"]
+    assert expired["share_url"] is None and not expired["active"]
+    regenerated = client.post(f"/api/dashboard/shares/{legacy['id']}/regenerate")
+    assert regenerated.status_code == 200
+    assert regenerated.json()["share_url"]
+    assert client.get(regenerated.json()["share_url"]).status_code == 200
+
+
+def test_public_base_url_is_used_for_share_urls(dashboard_env, monkeypatch) -> None:
+    from app.settings import get_settings
+
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://share.example.test/base")
+    get_settings.cache_clear()
+    client, _ = dashboard_env
+    created = client.post("/api/dashboard/shares", json={}).json()
+    assert created["share_url"].startswith("https://share.example.test/base/share/")
+    get_settings.cache_clear()
 
 
 def test_internal_dashboard_paginates_all_unmasked_records(dashboard_env) -> None:
