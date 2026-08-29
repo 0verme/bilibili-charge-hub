@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, TypeAlias
 
 from fastapi import Cookie, Depends, status
 from sqlalchemy import select
@@ -10,8 +10,8 @@ from app.errors import raise_api_error
 from app.models import User, UserRole, UserSession
 from app.security import hash_session_token
 
-DbSession = Annotated[Session, Depends(get_db)]
-SessionToken = Annotated[str | None, Cookie()]
+DbSession: TypeAlias = Annotated[Session, Depends(get_db)]
+SessionToken: TypeAlias = Annotated[str | None, Cookie()]
 
 
 def has_active_admin(db: Session) -> bool:

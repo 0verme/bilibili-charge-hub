@@ -38,7 +38,7 @@ python -m venv .venv
 
 对账是幂等恢复手段，不是「消息不丢」的保证：单次扫描上限默认为 2000 条（`NOTIFICATION_RECONCILIATION_MAX_RECORDS`），超出 24 小时窗口的极端中断缺口不会被追溯补建。
 
-登录后访问 `/dashboard` 管理全部功能。驾驶舱支持账号、时间、昵称/UID 和金额过滤、分页及按当前筛选流式导出。分享链接使用随机 Token、有效期、可选密码和昵称/UID 脱敏；密码通过 POST 解锁，不进入 URL 或反向代理日志。
+登录后访问 `/dashboard` 管理全部功能。驾驶舱支持账号、时间、昵称/UID 和金额过滤、分页及按当前筛选流式导出。分享链接使用有效期、可选密码和昵称/UID 脱敏；新分享链接由 share id 与服务端 HMAC 派生，active 分享可在管理页重复复制，密码通过 POST 解锁，不进入 URL 或反向代理日志。生产环境可用 `PUBLIC_BASE_URL` 指定外部访问地址。
 
 ## Docker Compose
 

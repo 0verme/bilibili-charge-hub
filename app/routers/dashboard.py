@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import csv
 import hashlib
 import hmac
 import io
-import secrets
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -14,18 +15,30 @@ from sqlalchemy import func, select
 
 from app.auth import CurrentUser, DbSession
 from app.errors import raise_api_error
-from app.models import BiliAccount, ChargeRecord, DashboardShare, JobRun
+from app.models import BiliAccount, ChargeRecord, DashboardShare, JobRun, new_id
 from app.security import hash_password, hash_session_token, verify_password
 from app.settings import get_settings
 
 router = APIRouter(tags=["dashboard"])
 SHARE_ACCESS_TTL_SECONDS = 60 * 60
+SHARE_TOKEN_SCHEME = "signed-v1"
 
 
 def as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def unix_timestamp(value: datetime) -> int:
+    return round(as_utc(value).timestamp())
+
+
+def parse_epoch(value: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def filter_datetime_to_utc(value: datetime) -> datetime:
@@ -290,20 +303,42 @@ def export_csv(
     )
 
 
+def share_token(share_id: str) -> str:
+    key = get_settings().app_secret_key.get_secret_value().encode()
+    signature = hmac.new(key, f"share-url|{share_id}".encode(), hashlib.sha256).hexdigest()
+    return f"{share_id}.{signature}"
+
+
+def public_share_url(request: Request, token: str) -> str:
+    base = get_settings().public_base_url
+    if base:
+        return f"{base.rstrip('/')}/share/{token}"
+    return f"{str(request.base_url).rstrip('/')}/share/{token}"
+
+
 @router.post("/api/dashboard/shares", status_code=status.HTTP_201_CREATED)
-def create_share(payload: ShareInput, user: CurrentUser, db: DbSession) -> dict[str, str]:
-    token = secrets.token_urlsafe(32)
+def create_share(
+    payload: ShareInput, request: Request, user: CurrentUser, db: DbSession
+) -> dict[str, str]:
     share = DashboardShare(
+        id=new_id(),
         user_id=user.id,
-        token_hash=hash_session_token(token),
+        token_scheme=SHARE_TOKEN_SCHEME,
+        token_hash="",
         password_hash=hash_password(payload.password) if payload.password else None,
         expires_at=datetime.now(UTC) + timedelta(hours=payload.expires_hours),
         mask_names=payload.mask_names,
         mask_uids=payload.mask_uids,
     )
+    token = share_token(share.id)
+    share.token_hash = hash_session_token(token)
     db.add(share)
     db.commit()
-    return {"token": token, "path": f"/share/{token}"}
+    return {
+        "token": token,
+        "path": f"/share/{token}",
+        "share_url": public_share_url(request, token),
+    }
 
 
 class ShareView(BaseModel):
@@ -312,14 +347,19 @@ class ShareView(BaseModel):
     mask_names: bool
     mask_uids: bool
     password_protected: bool
+    active: bool
+    legacy: bool
+    revoked_at: datetime | None = None
+    share_url: str | None = None
 
 
 @router.get("/api/dashboard/shares", response_model=list[ShareView])
-def list_shares(user: CurrentUser, db: DbSession) -> list[ShareView]:
+def list_shares(request: Request, user: CurrentUser, db: DbSession) -> list[ShareView]:  # type: ignore
     shares = db.scalars(
         select(DashboardShare).where(DashboardShare.user_id == user.id)
         .order_by(DashboardShare.created_at.desc())
     )
+    now = datetime.now(UTC)
     return [
         ShareView(
             id=item.id,
@@ -327,27 +367,68 @@ def list_shares(user: CurrentUser, db: DbSession) -> list[ShareView]:
             mask_names=item.mask_names,
             mask_uids=item.mask_uids,
             password_protected=item.password_hash is not None,
+            active=item.revoked_at is None and as_utc(item.expires_at) > now,
+            legacy=item.token_scheme != SHARE_TOKEN_SCHEME,
+            revoked_at=as_utc(item.revoked_at) if item.revoked_at else None,
+            share_url=(public_share_url(request, share_token(item.id))
+                       if item.token_scheme == SHARE_TOKEN_SCHEME
+                       and item.revoked_at is None and as_utc(item.expires_at) > now else None),
         )
         for item in shares
     ]
 
 
 @router.delete("/api/dashboard/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_share(share_id: str, user: CurrentUser, db: DbSession) -> None:
+def delete_share(share_id: str, user: CurrentUser, db: DbSession) -> None:  # type: ignore
     share = db.scalar(select(DashboardShare).where(
         DashboardShare.id == share_id, DashboardShare.user_id == user.id
     ))
     if share is None:
         raise_api_error(status.HTTP_404_NOT_FOUND, "share_not_found", "share not found")
-    db.delete(share)
+    share.revoked_at = datetime.now(UTC)
     db.commit()
 
 
-def get_share(db: DbSession, token: str) -> DashboardShare:
-    share = db.scalar(
-        select(DashboardShare).where(DashboardShare.token_hash == hash_session_token(token))
-    )
-    if share is None or as_utc(share.expires_at) <= datetime.now(UTC):
+@router.post("/api/dashboard/shares/{share_id}/regenerate", response_model=ShareView)
+def regenerate_share(
+    share_id: str, request: Request, user: CurrentUser, db: DbSession  # type: ignore
+) -> ShareView:
+    share = db.scalar(select(DashboardShare).where(
+        DashboardShare.id == share_id, DashboardShare.user_id == user.id
+    ))
+    if (
+        share is None
+        or share.revoked_at is not None
+        or as_utc(share.expires_at) <= datetime.now(UTC)
+    ):
+        raise_api_error(status.HTTP_404_NOT_FOUND, "share_not_found", "share not found")
+    share.token_scheme = SHARE_TOKEN_SCHEME
+    token = share_token(share.id)
+    share.token_hash = hash_session_token(token)
+    db.commit()
+    return ShareView(id=share.id, expires_at=as_utc(share.expires_at), mask_names=share.mask_names,
+                     mask_uids=share.mask_uids, password_protected=share.password_hash is not None,
+                     active=True, legacy=False, revoked_at=None,
+                     share_url=public_share_url(request, token))
+
+
+def get_share(db: DbSession, token: str) -> DashboardShare:  # type: ignore
+    share = None
+    if "." in token:
+        share_id, signature = token.split(".", 1)
+        if hmac.compare_digest(token, share_token(share_id)):
+            candidate = db.scalar(select(DashboardShare).where(DashboardShare.id == share_id))
+            if candidate is not None and candidate.token_scheme == SHARE_TOKEN_SCHEME:
+                share = candidate
+    if share is None:
+        share = db.scalar(
+            select(DashboardShare).where(DashboardShare.token_hash == hash_session_token(token))
+        )
+    if (
+        share is None
+        or share.revoked_at is not None
+        or as_utc(share.expires_at) <= datetime.now(UTC)
+    ):
         raise_api_error(status.HTTP_404_NOT_FOUND, "share_not_found", "share not found")
     return share
 
@@ -363,10 +444,10 @@ def share_access_signature(token: str, issued_at: int, expires_at: int) -> str:
 
 
 def issue_share_access(token: str, share: DashboardShare, now: datetime | None = None) -> str:
-    issued_at = int(as_utc(now or datetime.now(UTC)).timestamp())
+    issued_at = unix_timestamp(now or datetime.now(UTC))
     expires_at = min(
         issued_at + SHARE_ACCESS_TTL_SECONDS,
-        int(as_utc(share.expires_at).timestamp()),
+        unix_timestamp(share.expires_at),
     )
     signature = share_access_signature(token, issued_at, expires_at)
     return f"{issued_at}.{expires_at}.{signature}"
@@ -383,8 +464,8 @@ def validate_share_access(
         issued_at, expires_at = int(issued_text), int(expires_text)
     except (TypeError, ValueError):
         return False
-    current = int(as_utc(now or datetime.now(UTC)).timestamp())
-    share_expires_at = int(as_utc(share.expires_at).timestamp())
+    current = unix_timestamp(now or datetime.now(UTC))
+    share_expires_at = unix_timestamp(share.expires_at)
     if (
         issued_at > current + 60
         or expires_at <= current
@@ -402,7 +483,7 @@ class ShareUnlock(BaseModel):
 
 
 @router.get("/share/{token}", response_class=HTMLResponse, include_in_schema=False)
-def share_page(token: str, request: Request, db: DbSession) -> HTMLResponse:
+def share_page(token: str, request: Request, db: DbSession) -> HTMLResponse:  # type: ignore
     share = get_share(db, token)
     return request.app.state.templates.TemplateResponse(
         request=request, name="share.html",
@@ -411,7 +492,7 @@ def share_page(token: str, request: Request, db: DbSession) -> HTMLResponse:
 
 
 @router.post("/api/share/{token}/unlock", status_code=status.HTTP_204_NO_CONTENT)
-def unlock_share(token: str, payload: ShareUnlock, response: Response, db: DbSession) -> None:
+def unlock_share(token: str, payload: ShareUnlock, response: Response, db: DbSession) -> None:  # type: ignore
     share = get_share(db, token)
     if share.password_hash and not verify_password(payload.password, share.password_hash):
         raise_api_error(
@@ -420,8 +501,9 @@ def unlock_share(token: str, payload: ShareUnlock, response: Response, db: DbSes
             "incorrect share password",
         )
     access = issue_share_access(token, share)
-    _issued_at, expires_at, _signature = access.split(".", 2)
-    max_age = max(1, int(expires_at) - int(datetime.now(UTC).timestamp()))
+    _issued_at, expires_at_text, _signature = access.split(".", 2)
+    expires_at = parse_epoch(expires_at_text)
+    max_age = max(1, expires_at - unix_timestamp(datetime.now(UTC)))
     response.set_cookie(
         share_cookie_name(token),
         access,
@@ -434,7 +516,7 @@ def unlock_share(token: str, payload: ShareUnlock, response: Response, db: DbSes
 
 
 @router.get("/api/share/{token}")
-def shared_dashboard(token: str, db: DbSession, request: Request) -> dict:
+def shared_dashboard(token: str, db: DbSession, request: Request) -> dict:  # type: ignore
     share = get_share(db, token)
     if share.password_hash:
         supplied = request.cookies.get(share_cookie_name(token), "")
