@@ -1,6 +1,6 @@
 import secrets
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 from sqlalchemy import select
 
 from app.auth import AdminUser, CurrentUser, DbSession, SessionToken, has_active_admin
@@ -29,26 +29,27 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 users_router = APIRouter(prefix="/api/users", tags=["users"])
 
 
-def set_session_cookie(response: Response, token: str, csrf_token: str) -> None:
+def set_session_cookie(response: Response, request: Request, token: str, csrf_token: str) -> None:
+    secure = request.url.scheme == "https"
     response.set_cookie(
         "session_token",
         token,
         max_age=7 * 24 * 60 * 60,
         httponly=True,
-        secure=get_settings().app_env == "production",
+        secure=secure,
         samesite="lax",
     )
     response.set_cookie(
         "csrf_token",
         csrf_token,
         max_age=7 * 24 * 60 * 60,
-        secure=get_settings().app_env == "production",
+        secure=secure,
         samesite="strict",
     )
 
 
 @router.post("/setup", response_model=UserView, status_code=status.HTTP_201_CREATED)
-def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User:
+def setup_admin(payload: Credentials, request: Request, response: Response, db: DbSession) -> User:
     if has_active_admin(db):
         raise_api_error(
             status.HTTP_409_CONFLICT,
@@ -73,12 +74,12 @@ def setup_admin(payload: Credentials, response: Response, db: DbSession) -> User
         )
     )
     db.commit()
-    set_session_cookie(response, token, csrf_token)
+    set_session_cookie(response, request, token, csrf_token)
     return user
 
 
 @router.post("/login", response_model=UserView)
-def login(payload: Credentials, response: Response, db: DbSession) -> User:
+def login(payload: Credentials, request: Request, response: Response, db: DbSession) -> User:
     user = db.scalar(select(User).where(User.username == payload.username))
     if (
         user is None
@@ -95,7 +96,7 @@ def login(payload: Credentials, response: Response, db: DbSession) -> User:
         )
     )
     db.commit()
-    set_session_cookie(response, token, csrf_token)
+    set_session_cookie(response, request, token, csrf_token)
     return user
 
 
