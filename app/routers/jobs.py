@@ -30,9 +30,17 @@ class JobInput(BaseModel):
         return self
 
 
+class JobAccountView(BaseModel):
+    id: str
+    display_name: str
+    bili_uid: str
+    status: str
+
+
 class JobView(BaseModel):
     id: str
     bili_account_id: str | None
+    account: JobAccountView | None
     kind: JobKind
     trigger_type: str
     trigger_config: dict
@@ -40,6 +48,29 @@ class JobView(BaseModel):
     next_run_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+def job_view(db: DbSession, job: ScheduleJob) -> JobView:
+    account = db.get(BiliAccount, job.bili_account_id) if job.bili_account_id else None
+    return JobView(
+        id=job.id,
+        bili_account_id=job.bili_account_id,
+        account=(
+            JobAccountView(
+                id=account.id,
+                display_name=account.display_name,
+                bili_uid=account.bili_uid,
+                status=account.status.value,
+            )
+            if account
+            else None
+        ),
+        kind=job.kind,
+        trigger_type=job.trigger_type,
+        trigger_config=job.trigger_config,
+        enabled=job.enabled,
+        next_run_at=job.next_run_at,
+    )
 
 
 class ScheduleUpdate(BaseModel):
@@ -73,14 +104,15 @@ def require_tenant_account(db: DbSession, user_id: str, account_id: str) -> Bili
 
 
 @router.get("", response_model=list[JobView])
-def list_jobs(user: CurrentUser, db: DbSession) -> list[ScheduleJob]:
-    return list(
+def list_jobs(user: CurrentUser, db: DbSession) -> list[JobView]:
+    jobs = list(
         db.scalars(
             select(ScheduleJob)
             .where(ScheduleJob.user_id == user.id)
             .order_by(ScheduleJob.created_at)
         ).all()
     )
+    return [job_view(db, job) for job in jobs]
 
 
 @router.post("", response_model=JobView, status_code=status.HTTP_201_CREATED)
@@ -89,7 +121,7 @@ def create_job(
     user: CurrentUser,
     db: DbSession,
     scheduler: SchedulerDep,
-) -> ScheduleJob:
+) -> JobView:
     if payload.bili_account_id:
         require_tenant_account(db, user.id, payload.bili_account_id)
     trigger_type = "interval" if payload.interval_seconds is not None else "cron"
@@ -116,7 +148,7 @@ def create_job(
             db.delete(job)
             db.commit()
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid trigger") from exc
-    return job
+    return job_view(db, job)
 
 
 @router.patch("/{job_id}/enabled", response_model=JobView)
@@ -126,7 +158,7 @@ def set_job_enabled(
     user: CurrentUser,
     db: DbSession,
     scheduler: SchedulerDep,
-) -> ScheduleJob:
+) -> JobView:
     job = db.scalar(
         select(ScheduleJob).where(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id)
     )
@@ -135,7 +167,7 @@ def set_job_enabled(
     job.enabled = enabled
     db.commit()
     scheduler.sync_job(job, db)
-    return job
+    return job_view(db, job)
 
 
 @router.patch("/{job_id}/schedule", response_model=JobView)
@@ -145,7 +177,7 @@ def update_job_schedule(
     user: CurrentUser,
     db: DbSession,
     scheduler: SchedulerDep,
-) -> ScheduleJob:
+) -> JobView:
     job = db.scalar(
         select(ScheduleJob).where(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id)
     )
@@ -165,7 +197,7 @@ def update_job_schedule(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid trigger") from exc
-    return job
+    return job_view(db, job)
 
 
 @router.post("/{job_id}/run", status_code=status.HTTP_202_ACCEPTED)
