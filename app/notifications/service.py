@@ -1,5 +1,6 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -142,6 +143,13 @@ class NotificationDeliveryService:
             await self.client.aclose()
 
     async def process_pending(self, db: Session, user_id: str | None = None) -> int:
+        """Deliver pending events; kept as an int API for callers that only need a count."""
+        summary = await self.process_pending_summary(db, user_id)
+        return cast(int, summary["scanned"])
+
+    async def process_pending_summary(
+        self, db: Session, user_id: str | None = None
+    ) -> dict[str, object]:
         query = select(NotificationOutbox).where(
             NotificationOutbox.status.in_(["pending", "retry"]),
             NotificationOutbox.available_at <= datetime.now(UTC),
@@ -149,11 +157,25 @@ class NotificationDeliveryService:
         )
         if user_id:
             query = query.where(NotificationOutbox.user_id == user_id)
-        processed = 0
-        for event in db.scalars(query.order_by(NotificationOutbox.created_at).limit(100)):
+        events = list(db.scalars(query.order_by(NotificationOutbox.created_at).limit(100)))
+        succeeded = still_failed = budget_exceeded = 0
+        outbox_ids: list[str] = []
+        for event in events:
+            before = event.attempts
             await self.deliver_event(db, event)
-            processed += 1
-        return processed
+            outbox_ids.append(event.id)
+            if event.status == "delivered":
+                succeeded += 1
+            elif event.status == "failed":
+                still_failed += 1
+                if event.attempts >= MAX_ATTEMPTS and before < MAX_ATTEMPTS:
+                    budget_exceeded += 1
+        return {
+            "scanned": len(events), "retry_eligible": len(events), "retried": len(events),
+            "succeeded": succeeded, "still_failed": still_failed,
+            "retry_budget_exceeded": budget_exceeded, "skipped": 0,
+            "outbox_ids": outbox_ids,
+        }
 
     async def deliver_event(self, db: Session, event: NotificationOutbox) -> None:
         subscriptions = db.execute(

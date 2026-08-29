@@ -62,6 +62,7 @@ class RunStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"
+    PARTIAL_SUCCESS = "partial_success"
 
 
 class User(Base, TimestampMixin):
@@ -166,11 +167,18 @@ class JobRun(Base):
     schedule_job_id: Mapped[str | None] = mapped_column(
         ForeignKey("schedule_jobs.id", ondelete="SET NULL"), index=True
     )
+    # Snapshot execution ownership and cause so history remains auditable after a job changes.
+    bili_account_id: Mapped[str | None] = mapped_column(
+        ForeignKey("bili_accounts.id", ondelete="SET NULL"), index=True
+    )
+    trigger_type: Mapped[str] = mapped_column(String(24), default="scheduled")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[RunStatus] = mapped_column(SqlEnum(RunStatus, native_enum=False), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_type: Mapped[str | None] = mapped_column(String(128))
     error: Mapped[str | None] = mapped_column(Text)
 
 

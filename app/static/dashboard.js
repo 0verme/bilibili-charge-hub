@@ -1,29 +1,710 @@
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];const widgets=window.DashboardWidgets;let me,page=1,total=0,pageSize=20,dashboardTimezone;
-function navigateSameOrigin(path){const target=new URL(path,window.location.origin);if(target.origin!==window.location.origin)throw new Error('不允许跳转到外部地址');window.location.replace(target.href)}
-const jobNames={charge_collection:'充电记录采集',coupon_claim:'B 币券领取',notification_retry:'通知失败重试',daily_task:'每日任务'};const jobName=kind=>jobNames[kind]||kind;
-const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('csrf_token='))?.split('=').slice(1).join('=')||'';
-async function api(path,options={}){const headers={...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})};if(options.method&&!['GET','HEAD'].includes(options.method))headers['X-CSRF-Token']=decodeURIComponent(csrf());const r=await fetch(path,{...options,headers});if(!r.ok){const d=await r.json().catch(()=>({}));const detail=d.detail&&typeof d.detail==='object'?d.detail:d;const code=detail.code||'request_failed';const message=detail.message||(typeof d.detail==='string'?d.detail:`请求失败 (${r.status})`);const error=new Error(message);error.code=code;error.status=r.status;if(r.status===401&&['session_expired','auth_required'].includes(code))navigateSameOrigin('/login');throw error}return r.status===204?null:r.json()}
-function el(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n}function toast(text,error=false){const n=el('div',text,'toast '+(error?'error':'success'));$('#toast').append(n);setTimeout(()=>n.remove(),3500)}function button(text,fn,cls='secondary'){const b=el('button',text,cls);b.type='button';b.onclick=()=>Promise.resolve(fn()).catch(e=>toast(e.message,true));return b}function values(form){const d=Object.fromEntries(new FormData(form));return Object.fromEntries(Object.entries(d).filter(([,v])=>v!==''))}function formatTime(value){return widgets.formatTime(value,dashboardTimezone)}function showFormError(form,message=''){let node=form.querySelector('[data-form-error]');if(!node){node=el('p',undefined,'error');node.dataset.formError='true';form.append(node)}node.textContent=message;node.classList.toggle('hidden',!message)}
+const $ = (s) => document.querySelector(s),
+	$$ = (s) => [...document.querySelectorAll(s)];
+const widgets = window.DashboardWidgets;
+let me,
+	page = 1,
+	total = 0,
+	pageSize = 20,
+	dashboardTimezone;
+function navigateSameOrigin(path) {
+	const target = new URL(path, window.location.origin);
+	if (target.origin !== window.location.origin)
+		throw new Error("不允许跳转到外部地址");
+	window.location.replace(target.href);
+}
+const jobNames = {
+	charge_collection: "充电记录采集",
+	coupon_claim: "B 币券领取",
+	notification_retry: "通知失败重试",
+	daily_task: "每日任务",
+};
+const jobName = (kind) => jobNames[kind] || kind;
+const csrf = () =>
+	document.cookie
+		.split("; ")
+		.find((x) => x.startsWith("csrf_token="))
+		?.split("=")
+		.slice(1)
+		.join("=") || "";
+async function api(path, options = {}) {
+	const headers = {
+		...(options.body ? { "Content-Type": "application/json" } : {}),
+		...(options.headers || {}),
+	};
+	if (options.method && !["GET", "HEAD"].includes(options.method))
+		headers["X-CSRF-Token"] = decodeURIComponent(csrf());
+	const r = await fetch(path, { ...options, headers });
+	if (!r.ok) {
+		const d = await r.json().catch(() => ({}));
+		const detail = d.detail && typeof d.detail === "object" ? d.detail : d;
+		const code = detail.code || "request_failed";
+		const message =
+			detail.message ||
+			(typeof d.detail === "string" ? d.detail : `请求失败 (${r.status})`);
+		const error = new Error(message);
+		error.code = code;
+		error.status = r.status;
+		if (r.status === 401 && ["session_expired", "auth_required"].includes(code))
+			navigateSameOrigin("/login");
+		throw error;
+	}
+	return r.status === 204 ? null : r.json();
+}
+function el(tag, text, cls) {
+	const n = document.createElement(tag);
+	if (text !== undefined) n.textContent = String(text);
+	if (cls) n.className = cls;
+	return n;
+}
+function toast(text, error = false) {
+	const n = el("div", text, "toast " + (error ? "error" : "success"));
+	$("#toast").append(n);
+	setTimeout(() => n.remove(), 3500);
+}
+function button(text, fn, cls = "secondary") {
+	const b = el("button", text, cls);
+	b.type = "button";
+	b.onclick = () => Promise.resolve(fn()).catch((e) => toast(e.message, true));
+	return b;
+}
+function values(form) {
+	const d = Object.fromEntries(new FormData(form));
+	return Object.fromEntries(Object.entries(d).filter(([, v]) => v !== ""));
+}
+function formatTime(value) {
+	return widgets.formatTime(value, dashboardTimezone);
+}
+function showFormError(form, message = "") {
+	let node = form.querySelector("[data-form-error]");
+	if (!node) {
+		node = el("p", undefined, "error");
+		node.dataset.formError = "true";
+		form.append(node);
+	}
+	node.textContent = message;
+	node.classList.toggle("hidden", !message);
+}
 widgets.initTheme();
-$$('[data-view]').forEach(b=>b.onclick=()=>{$$('[data-view]').forEach(x=>x.classList.toggle('active',x===b));$$('.view').forEach(x=>x.classList.toggle('active',x.id===b.dataset.view));$('#title').textContent=b.textContent;if(b.dataset.view!=='overview')$('#state').textContent='';loadView(b.dataset.view)});
-async function loadView(v){if(v==='overview')return loadDashboard();if(v==='accounts')return loadAccounts();if(v==='jobs')return loadJobs();if(v==='notifications')return loadChannels();if(v==='shares')return loadShares();if(v==='users'&&me.role==='admin')return loadUsers()}
-async function loadDashboard(){const q=new URLSearchParams(values($('#filters')));q.set('page',page);q.set('page_size',pageSize);const d=await api('/api/dashboard?'+q);dashboardTimezone=d.timezone;total=d.pagination.total;const totalPages=Math.max(1,Math.ceil(total/pageSize));if(page>totalPages){page=totalPages;return loadDashboard()}const first=d.trend[0]?.date,last=d.trend.at(-1)?.date;$('#state').textContent=first?`${first} 至 ${last} · ${dashboardTimezone}`:`暂无充电记录 · ${dashboardTimezone}`;widgets.renderSummary($('#summary'),d);widgets.drawTrend($('#trend-chart'),d.trend);widgets.renderRanking($('#supporter-ranking'),d.top_supporters);widgets.renderMonthly($('#monthly-bars'),d.trend);$('#record-count').textContent=`共 ${total.toLocaleString('zh-CN')} 条 · 当前第 ${page} 页 · 未脱敏`;$('#records').replaceChildren(...d.records.map(item=>{const tr=el('tr');const cells=[[formatTime(item.charged_at),''],[item.name,''],[item.uid,''],[widgets.money(item.amount),'money-cell charge'],[widgets.money(item.brokerage),'money-cell'],[item.remark||'—','remark-cell']];cells.forEach(([value,cls])=>tr.append(el('td',value,cls)));return tr}));$('#page').textContent=`第 ${page} / ${totalPages} 页`;$('#prev').disabled=page<=1;$('#next').disabled=page>=totalPages;const select=$('#filters select');const current=select.value;select.replaceChildren(el('option','全部账号'));select.firstChild.value='';d.accounts.forEach(a=>{const o=el('option',a.name||a.uid);o.value=a.id;select.append(o)});select.value=current}
-$('#filters').onsubmit=e=>{e.preventDefault();page=1;loadDashboard().catch(x=>toast(x.message,true))};$('#prev').onclick=()=>{if(page>1){page--;loadDashboard().catch(x=>toast(x.message,true))}};$('#next').onclick=()=>{if(page*pageSize<total){page++;loadDashboard().catch(x=>toast(x.message,true))}};$('#page-size').onchange=e=>{pageSize=Number(e.target.value);page=1;loadDashboard().catch(x=>toast(x.message,true))};$('#export').onclick=()=>{const q=new URLSearchParams(values($('#filters')));navigateSameOrigin('/api/dashboard/export.csv?'+q)};
-async function loadAccounts(){const items=await api('/api/bili/accounts');$('#account-list').replaceChildren(...items.map(a=>{const c=el('article',undefined,'card');c.append(el('h3',a.display_name||`UID ${a.bili_uid}`),el('p',a.status,'badge'),el('p',a.last_checked_at?`上次检查：${formatTime(a.last_checked_at)}`:'尚未采集','muted'),button('立即采集',async()=>{const r=await api(`/api/bili/accounts/${a.id}/collect`,{method:'POST'});toast(`采集完成，新增 ${r.inserted} 条`);loadDashboard()}),button('每日任务',async()=>{await openDailyTask(a)}),button('修改名称',async()=>{const name=prompt('显示名称',a.display_name||'');if(name)await api(`/api/bili/accounts/${a.id}`,{method:'PATCH',body:JSON.stringify({display_name:name})});loadAccounts()}),button('解绑',async()=>{if(confirm('解绑将删除该账号及其充电记录，确定继续？')){await api(`/api/bili/accounts/${a.id}`,{method:'DELETE'});loadAccounts()}},'danger'));return c}))}
-$('#bind').onclick=async()=>{const q=await api('/api/bili/qr-sessions',{method:'POST'});const box=$('#qr');box.classList.remove('hidden');box.querySelector('img').src=`/api/bili/qr-sessions/${q.id}/image`;box.querySelector('p').textContent='等待扫码…';const timer=setInterval(async()=>{try{const s=await api(`/api/bili/qr-sessions/${q.id}`);box.querySelector('p').textContent=s.status;if(s.status==='completed'||s.status==='expired'){clearInterval(timer);if(s.status==='completed'){toast('绑定成功');loadAccounts()}}}catch(e){clearInterval(timer);toast(e.message,true)}},2000)};
-function jobAccountLabel(job){return job.account?`${job.account.display_name||'未命名账号'} · UID ${job.account.bili_uid}`:'当前租户（通知中心）'}
-function renderJobCard(j){const c=el('article',undefined,'card');c.append(el('h3',jobName(j.kind)),el('p',j.enabled?'已启用':'已停用','badge'),el('p',j.next_run_at?`下次：${formatTime(j.next_run_at)}`:'无下次运行','muted'),button(j.enabled?'停用':'启用',async()=>{await api(`/api/jobs/${j.id}/enabled?enabled=${!j.enabled}`,{method:'PATCH'});loadJobs()}),button('修改周期',async()=>{const seconds=prompt('输入运行间隔（秒，至少 20）',j.trigger_config.seconds||300);if(seconds){await api(`/api/jobs/${j.id}/schedule`,{method:'PATCH',body:JSON.stringify({interval_seconds:Number(seconds)})});loadJobs()}}),button('立即运行',async()=>{const r=await api(`/api/jobs/${j.id}/run`,{method:'POST'});toast(`任务已入队 ${r.run_id}`);setTimeout(loadJobs,1000)}),button('删除',async()=>{if(confirm('确定删除任务？')){await api(`/api/jobs/${j.id}`,{method:'DELETE'});loadJobs()}},'danger'));return c}
-function renderJobGroup(title,jobs){const section=el('section',undefined,'job-group');const heading=el('div',undefined,'job-group-heading');heading.append(el('h2',title),el('span',`${jobs.length} 个任务`,'muted'));section.append(heading);const grid=el('div',undefined,'grid');grid.append(...jobs.map(renderJobCard));section.append(grid);return section}
-async function loadJobs(){const [jobs,runs]=await Promise.all([api('/api/jobs'),api('/api/job-runs')]),jobsById=new Map(jobs.map(j=>[j.id,j]));const groups=new Map();jobs.forEach(j=>{const key=j.account?.id||'tenant';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(j)});const sections=[];groups.forEach((items,key)=>sections.push(renderJobGroup(key==='tenant'?'租户级任务 · 通知中心':jobAccountLabel(items[0]),items)));$('#job-list').replaceChildren(...sections);$('#run-list').replaceChildren(...runs.map(r=>{const tr=el('tr'),job=jobsById.get(r.schedule_job_id);[r.status,job?`${jobName(job.kind)} · ${jobAccountLabel(job)}`:'-',formatTime(r.started_at),r.error||(`${r.duration_ms??'-'} ms`)].forEach(v=>tr.append(el('td',v)));return tr}))}
-const events=['new_charge','collection_failed','cookie_expired','coupon_claim_succeeded','coupon_claim_failed','scheduled_job_failed','daily_task_succeeded','daily_task_failed'];function channelConfig(v){if(v.provider==='telegram')return{bot_token:v.endpoint,chat_id:v.chat_id};if(v.provider==='serverchan')return{send_key:v.endpoint};if(v.provider==='webhook')return{url:v.endpoint};return{webhook_url:v.endpoint}}
-$('#daily-task-cancel').onclick=()=>$('#daily-task-panel').classList.add('hidden');let dailyTaskAccountId=null;
-function fillDailyTaskForm(p){const f=$('#daily-task-form');f.enabled.checked=p.enabled;f.target_coins.value=p.target_coins;f.protected_coins.value=p.protected_coins;f.select_like.checked=p.select_like;f.skip_when_lv6.checked=p.skip_when_lv6;f.share_enabled.checked=p.share_enabled;f.watch_enabled.checked=p.watch_enabled;f.support_up_ids.value=(p.support_up_ids||[]).join(', ')}
-function collectDailyTaskForm(){const f=$('#daily-task-form'),d=Object.fromEntries(new FormData(f));return{enabled:f.enabled.checked,target_coins:Number(d.target_coins||0),protected_coins:Number(d.protected_coins||0),select_like:f.select_like.checked,skip_when_lv6:f.skip_when_lv6.checked,share_enabled:f.share_enabled.checked,watch_enabled:f.watch_enabled.checked,support_up_ids:String(d.support_up_ids||'').split(/[,，\s]+/).map(s=>Number(s)).filter(n=>Number.isFinite(n)&&n>0)}}
-async function openDailyTask(a){dailyTaskAccountId=a.id;const p=await api(`/api/bili/accounts/${a.id}/daily-task`);fillDailyTaskForm(p);$('#daily-task-panel').classList.remove('hidden');$('#daily-task-panel').scrollIntoView({behavior:'smooth'});await loadDailyTaskRecords(a.id)}
-async function loadDailyTaskRecords(accountId){const records=await api(`/api/bili/accounts/${accountId}/daily-task-records`);$('#daily-task-records').replaceChildren(...records.map(r=>{const tr=el('tr');[r.task_date,r.status,`${r.coins_donated}/${r.target_coins}`,r.share_done?'√':'—',r.watch_done?'√':'—',r.message||'-'].forEach(v=>tr.append(el('td',v)));return tr}))}
-$('#daily-task-form').onsubmit=async e=>{e.preventDefault();if(!dailyTaskAccountId)return;if(confirm('保存后将按新配置执行每日任务；投币会消耗硬币，请确认配置无误。')){await api(`/api/bili/accounts/${dailyTaskAccountId}/daily-task`,{method:'PUT',body:JSON.stringify(collectDailyTaskForm())});toast('每日任务配置已保存');await loadDailyTaskRecords(dailyTaskAccountId);loadJobs()}};$('#channel-form').onsubmit=async e=>{e.preventDefault();const v=values(e.target);await api('/api/notifications/channels',{method:'POST',body:JSON.stringify({name:v.name,provider:v.provider,config:channelConfig(v),event_types:events,enabled:true})});e.target.reset();toast('渠道已保存');loadChannels()};async function loadChannels(){const [channels,deliveries]=await Promise.all([api('/api/notifications/channels'),api('/api/notifications/deliveries')]);$('#channel-list').replaceChildren(...channels.map(c=>{const n=el('article',undefined,'card');n.append(el('h3',c.name),el('p',c.provider,'badge'),el('p',c.event_types.join('、'),'muted'),button(c.enabled?'停用':'启用',async()=>{await api(`/api/notifications/channels/${c.id}/enabled?enabled=${!c.enabled}`,{method:'PATCH'});loadChannels()}),button('测试',async()=>{const r=await api(`/api/notifications/channels/${c.id}/test`,{method:'POST'});toast(`测试结果：${r.status}`)}),button('删除',async()=>{if(confirm('确定删除渠道？')){await api(`/api/notifications/channels/${c.id}`,{method:'DELETE'});loadChannels()}},'danger'));return n}));$('#delivery-list').replaceChildren(...deliveries.map(d=>{const tr=el('tr');[d.status,d.channel_id,d.attempts,d.response_summary||d.error_type||'-'].forEach(v=>tr.append(el('td',v)));if(d.status==='failed'){const td=el('td');td.append(button('重试',()=>api(`/api/notifications/deliveries/${d.id}/retry`,{method:'POST'})));tr.append(td)}return tr}))}
-async function copyText(text){try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return true}}catch{}const input=el('textarea');input.value=text;input.style.position='fixed';input.style.opacity='0';document.body.append(input);input.select();let copied=false;try{copied=document.execCommand('copy')}catch{}input.remove();if(!copied)throw new Error('无法访问剪贴板，请手动复制') ;return true}
-function showCreatedShare(url,copied){let panel=$('#created-share');if(!panel){panel=el('article',undefined,'panel');panel.id='created-share';$('#share-form').parentElement.append(panel)}const input=el('input');input.value=url;input.readOnly=true;input.setAttribute('aria-label','新创建的分享链接');panel.replaceChildren(el('p',copied?'分享链接已复制；也可在此手动复制：':'无法访问剪贴板，请手动复制：','muted'),input,button('复制链接',async()=>{await copyText(url);toast('链接已复制')}))}
-$('#share-form').onsubmit=async e=>{e.preventDefault();const v=values(e.target);v.expires_hours=Number(v.expires_hours);v.mask_names=true;v.mask_uids=true;const r=await api('/api/dashboard/shares',{method:'POST',body:JSON.stringify(v)});const url=r.share_url;let copied=false;try{await copyText(url);copied=true}catch{}showCreatedShare(url,copied);toast(copied?'链接已复制':'分享已创建，请手动复制链接');loadShares()};async function loadShares(){const items=await api('/api/dashboard/shares');$('#share-list').replaceChildren(...items.map(s=>{const c=el('article',undefined,'card');const status=s.active?'有效':(s.revoked_at?'已撤销':'已过期');c.append(el('h3',s.password_protected?'密码分享':'公开分享'),el('p',`${status} · 到期：${formatTime(s.expires_at)}`,'muted'));if(s.active&&s.share_url){c.append(button('复制链接',async()=>{await copyText(s.share_url);toast('链接已复制')}))}else if(s.active&&s.legacy){c.append(button('重新生成链接',async()=>{const r=await api(`/api/dashboard/shares/${s.id}/regenerate`,{method:'POST'});await copyText(r.share_url);toast('链接已复制');loadShares()}))}if(s.active)c.append(button('撤销',async()=>{await api(`/api/dashboard/shares/${s.id}`,{method:'DELETE'});loadShares()},'danger'));return c}))}
-$('#password-form').onsubmit=async e=>{e.preventDefault();showFormError(e.target);try{await api('/api/auth/change-password',{method:'POST',body:JSON.stringify(values(e.target))});e.target.reset();toast('密码已修改，其他会话已退出')}catch(error){showFormError(e.target,error.message)}};$('#user-form').onsubmit=async e=>{e.preventDefault();await api('/api/users',{method:'POST',body:JSON.stringify(values(e.target))});e.target.reset();loadUsers()};async function loadUsers(){const items=await api('/api/users');$('#user-list').replaceChildren(...items.map(u=>{const row=el('div',undefined,'row panel');row.append(el('span',`${u.username} · ${u.role}`),button(u.is_active?'停用':'启用',async()=>{await api(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify({is_active:!u.is_active})});loadUsers()},u.is_active?'danger':'secondary'),button('重置密码',async()=>{const p=prompt('输入新密码');if(p){await api(`/api/users/${u.id}/reset-password`,{method:'POST',body:JSON.stringify({new_password:p})});toast('密码已重置')}}));return row}))}
-$('#logout').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});navigateSameOrigin('/login')};(async()=>{try{me=await api('/api/auth/me');$('#identity').textContent=`${me.username} · ${me.role}`;if(me.role==='admin')$('#admin-users').classList.remove('hidden');await loadDashboard()}catch(e){if(!['auth_required','session_expired'].includes(e.code))toast(e.message,true)}})();
+$$("[data-view]").forEach(
+	(b) =>
+		(b.onclick = () => {
+			$$("[data-view]").forEach((x) => x.classList.toggle("active", x === b));
+			$$(".view").forEach((x) =>
+				x.classList.toggle("active", x.id === b.dataset.view),
+			);
+			$("#title").textContent = b.textContent;
+			if (b.dataset.view !== "overview") $("#state").textContent = "";
+			loadView(b.dataset.view);
+		}),
+);
+async function loadView(v) {
+	if (v === "overview") return loadDashboard();
+	if (v === "accounts") return loadAccounts();
+	if (v === "jobs") return loadJobs();
+	if (v === "notifications") return loadChannels();
+	if (v === "shares") return loadShares();
+	if (v === "users" && me.role === "admin") return loadUsers();
+}
+async function loadDashboard() {
+	const q = new URLSearchParams(values($("#filters")));
+	q.set("page", page);
+	q.set("page_size", pageSize);
+	const d = await api("/api/dashboard?" + q);
+	dashboardTimezone = d.timezone;
+	total = d.pagination.total;
+	const totalPages = Math.max(1, Math.ceil(total / pageSize));
+	if (page > totalPages) {
+		page = totalPages;
+		return loadDashboard();
+	}
+	const first = d.trend[0]?.date,
+		last = d.trend.at(-1)?.date;
+	$("#state").textContent = first
+		? `${first} 至 ${last} · ${dashboardTimezone}`
+		: `暂无充电记录 · ${dashboardTimezone}`;
+	widgets.renderSummary($("#summary"), d);
+	widgets.drawTrend($("#trend-chart"), d.trend);
+	widgets.renderRanking($("#supporter-ranking"), d.top_supporters);
+	widgets.renderMonthly($("#monthly-bars"), d.trend);
+	$("#record-count").textContent =
+		`共 ${total.toLocaleString("zh-CN")} 条 · 当前第 ${page} 页 · 未脱敏`;
+	$("#records").replaceChildren(
+		...d.records.map((item) => {
+			const tr = el("tr");
+			const cells = [
+				[formatTime(item.charged_at), ""],
+				[item.name, ""],
+				[item.uid, ""],
+				[widgets.money(item.amount), "money-cell charge"],
+				[widgets.money(item.brokerage), "money-cell"],
+				[item.remark || "—", "remark-cell"],
+			];
+			cells.forEach(([value, cls]) => tr.append(el("td", value, cls)));
+			return tr;
+		}),
+	);
+	$("#page").textContent = `第 ${page} / ${totalPages} 页`;
+	$("#prev").disabled = page <= 1;
+	$("#next").disabled = page >= totalPages;
+	const select = $("#filters select");
+	const current = select.value;
+	select.replaceChildren(el("option", "全部账号"));
+	select.firstChild.value = "";
+	d.accounts.forEach((a) => {
+		const o = el("option", a.name || a.uid);
+		o.value = a.id;
+		select.append(o);
+	});
+	select.value = current;
+}
+$("#filters").onsubmit = (e) => {
+	e.preventDefault();
+	page = 1;
+	loadDashboard().catch((x) => toast(x.message, true));
+};
+$("#prev").onclick = () => {
+	if (page > 1) {
+		page--;
+		loadDashboard().catch((x) => toast(x.message, true));
+	}
+};
+$("#next").onclick = () => {
+	if (page * pageSize < total) {
+		page++;
+		loadDashboard().catch((x) => toast(x.message, true));
+	}
+};
+$("#page-size").onchange = (e) => {
+	pageSize = Number(e.target.value);
+	page = 1;
+	loadDashboard().catch((x) => toast(x.message, true));
+};
+$("#export").onclick = () => {
+	const q = new URLSearchParams(values($("#filters")));
+	navigateSameOrigin("/api/dashboard/export.csv?" + q);
+};
+async function loadAccounts() {
+	const items = await api("/api/bili/accounts");
+	$("#account-list").replaceChildren(
+		...items.map((a) => {
+			const c = el("article", undefined, "card");
+			c.append(
+				el("h3", a.display_name || `UID ${a.bili_uid}`),
+				el("p", a.status, "badge"),
+				el(
+					"p",
+					a.last_checked_at
+						? `上次检查：${formatTime(a.last_checked_at)}`
+						: "尚未采集",
+					"muted",
+				),
+				button("立即采集", async () => {
+					const r = await api(`/api/bili/accounts/${a.id}/collect`, {
+						method: "POST",
+					});
+					toast(`采集完成，新增 ${r.inserted} 条`);
+					loadDashboard();
+				}),
+				button("每日任务", async () => {
+					await openDailyTask(a);
+				}),
+				button("修改名称", async () => {
+					const name = prompt("显示名称", a.display_name || "");
+					if (name)
+						await api(`/api/bili/accounts/${a.id}`, {
+							method: "PATCH",
+							body: JSON.stringify({ display_name: name }),
+						});
+					loadAccounts();
+				}),
+				button(
+					"解绑",
+					async () => {
+						if (confirm("解绑将删除该账号及其充电记录，确定继续？")) {
+							await api(`/api/bili/accounts/${a.id}`, { method: "DELETE" });
+							loadAccounts();
+						}
+					},
+					"danger",
+				),
+			);
+			return c;
+		}),
+	);
+}
+$("#bind").onclick = async () => {
+	const q = await api("/api/bili/qr-sessions", { method: "POST" });
+	const box = $("#qr");
+	box.classList.remove("hidden");
+	box.querySelector("img").src = `/api/bili/qr-sessions/${q.id}/image`;
+	box.querySelector("p").textContent = "等待扫码…";
+	const timer = setInterval(async () => {
+		try {
+			const s = await api(`/api/bili/qr-sessions/${q.id}`);
+			box.querySelector("p").textContent = s.status;
+			if (s.status === "completed" || s.status === "expired") {
+				clearInterval(timer);
+				if (s.status === "completed") {
+					toast("绑定成功");
+					loadAccounts();
+				}
+			}
+		} catch (e) {
+			clearInterval(timer);
+			toast(e.message, true);
+		}
+	}, 2000);
+};
+function jobAccountLabel(job) {
+	return job.account
+		? `${job.account.display_name || "未命名账号"} · UID ${job.account.bili_uid}`
+		: "当前租户（通知中心）";
+}
+function renderJobCard(j) {
+	const c = el("article", undefined, "card");
+	c.append(
+		el("h3", jobName(j.kind)),
+		el("p", j.enabled ? "已启用" : "已停用", "badge"),
+		el(
+			"p",
+			j.next_run_at ? `下次：${formatTime(j.next_run_at)}` : "无下次运行",
+			"muted",
+		),
+		button(j.enabled ? "停用" : "启用", async () => {
+			await api(`/api/jobs/${j.id}/enabled?enabled=${!j.enabled}`, {
+				method: "PATCH",
+			});
+			loadJobs();
+		}),
+		button("修改周期", async () => {
+			const seconds = prompt(
+				"输入运行间隔（秒，至少 20）",
+				j.trigger_config.seconds || 300,
+			);
+			if (seconds) {
+				await api(`/api/jobs/${j.id}/schedule`, {
+					method: "PATCH",
+					body: JSON.stringify({ interval_seconds: Number(seconds) }),
+				});
+				loadJobs();
+			}
+		}),
+		button("立即运行", async () => {
+			const r = await api(`/api/jobs/${j.id}/run`, { method: "POST" });
+			toast(`任务已入队 ${r.run_id}`);
+			setTimeout(loadJobs, 1000);
+		}),
+		button(
+			"删除",
+			async () => {
+				if (confirm("确定删除任务？")) {
+					await api(`/api/jobs/${j.id}`, { method: "DELETE" });
+					loadJobs();
+				}
+			},
+			"danger",
+		),
+	);
+	return c;
+}
+function renderJobGroup(title, jobs) {
+	const section = el("section", undefined, "job-group");
+	const heading = el("div", undefined, "job-group-heading");
+	heading.append(el("h2", title), el("span", `${jobs.length} 个任务`, "muted"));
+	section.append(heading);
+	const grid = el("div", undefined, "grid");
+	grid.append(...jobs.map(renderJobCard));
+	section.append(grid);
+	return section;
+}
+function runStatusLabel(status) {
+	return { succeeded: "成功", failed: "失败", skipped: "跳过 / 无操作", partial_success: "部分成功", queued: "排队中", running: "运行中" }[status] || status;
+}
+function runTriggerLabel(trigger) {
+	return { scheduled: "定时", manual: "人工", retry: "重试", reconciliation: "对账 / 恢复" }[trigger] || trigger;
+}
+function runAccountLabel(run) {
+	return run.account ? `${run.account.display_name || "未命名账号"} · UID ${run.account.bili_uid}` : "系统任务 / Global";
+}
+function runSummary(run) {
+	if (run.result?.conclusion) return run.result.conclusion;
+	return Object.entries(run.result || {}).filter(([k]) => !["conclusion", "no_op"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(" · ") || "暂无结果数据";
+}
+async function openRunDetail(runId) {
+	const run = await api(`/api/job-runs/${runId}`);
+	const body = $("#run-detail-body");
+	body.replaceChildren();
+	const fields = { 任务: run.task_name || run.task_key, 账号: runAccountLabel(run), "Execution ID": run.id, "Scheduler Job ID": run.schedule_job_id || "-", 触发: runTriggerLabel(run.trigger_type), 计划时间: run.scheduled_at ? formatTime(run.scheduled_at) : "-", 开始: formatTime(run.started_at), 结束: run.finished_at ? formatTime(run.finished_at) : "-", 耗时: `${run.duration_ms ?? "-"} ms`, 状态: runStatusLabel(run.status), 结论: runSummary(run), 错误类型: run.error_type || "-", 错误信息: run.error || "-" };
+	Object.entries(fields).forEach(([key, value]) => { const p = el("p"); p.append(el("strong", `${key}：`), el("span", value)); body.append(p); });
+	const details = el("details"), summary = el("summary", "结构化结果 / 关联信息");
+	details.append(summary, el("pre", JSON.stringify(run.result || {}, null, 2))); body.append(details);
+	$("#run-detail").showModal();
+}
+async function loadJobs() {
+	const filter = $("#run-filters");
+	const params = filter ? new URLSearchParams(values(filter)) : new URLSearchParams();
+	if (filter?.changed_only?.checked) params.set("changed_only", "true");
+	const [jobs, runs, accounts] = await Promise.all([api("/api/jobs"), api(`/api/job-runs?${params}`), api("/api/bili/accounts")]);
+	const accountSelect = filter?.account_id;
+	if (accountSelect && accountSelect.options.length === 1) accounts.forEach((a) => { const option = el("option", `${a.display_name || "未命名账号"} · UID ${a.bili_uid}`); option.value = a.id; accountSelect.append(option); });
+	const groups = new Map();
+	jobs.forEach((j) => { const key = j.account?.id || "tenant"; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(j); });
+	$("#job-list").replaceChildren(...[...groups].map(([key, items]) => renderJobGroup(key === "tenant" ? "租户级任务 · 通知中心" : jobAccountLabel(items[0]), items)));
+	$("#run-list").replaceChildren(...runs.map((r) => { const tr = el("tr"); tr.onclick = () => openRunDetail(r.id).catch((e) => toast(e.message, true)); [runStatusLabel(r.status), runAccountLabel(r), r.task_name || r.task_key || "系统任务", runTriggerLabel(r.trigger_type), formatTime(r.started_at), `${r.duration_ms ?? "-"} ms`, runSummary(r)].forEach((v) => tr.append(el("td", v))); return tr; }));
+}
+$("#run-filters")?.addEventListener("submit", (event) => { event.preventDefault(); loadJobs().catch((e) => toast(e.message, true)); });
+$(".dialog-close")?.addEventListener("click", () => $("#run-detail").close());
+const events = [
+	"new_charge",
+	"collection_failed",
+	"cookie_expired",
+	"coupon_claim_succeeded",
+	"coupon_claim_failed",
+	"scheduled_job_failed",
+	"daily_task_succeeded",
+	"daily_task_failed",
+];
+function channelConfig(v) {
+	if (v.provider === "telegram")
+		return { bot_token: v.endpoint, chat_id: v.chat_id };
+	if (v.provider === "serverchan") return { send_key: v.endpoint };
+	if (v.provider === "webhook") return { url: v.endpoint };
+	return { webhook_url: v.endpoint };
+}
+$("#daily-task-cancel").onclick = () =>
+	$("#daily-task-panel").classList.add("hidden");
+let dailyTaskAccountId = null;
+function fillDailyTaskForm(p) {
+	const f = $("#daily-task-form");
+	f.enabled.checked = p.enabled;
+	f.target_coins.value = p.target_coins;
+	f.protected_coins.value = p.protected_coins;
+	f.select_like.checked = p.select_like;
+	f.skip_when_lv6.checked = p.skip_when_lv6;
+	f.share_enabled.checked = p.share_enabled;
+	f.watch_enabled.checked = p.watch_enabled;
+	f.support_up_ids.value = (p.support_up_ids || []).join(", ");
+}
+function collectDailyTaskForm() {
+	const f = $("#daily-task-form"),
+		d = Object.fromEntries(new FormData(f));
+	return {
+		enabled: f.enabled.checked,
+		target_coins: Number(d.target_coins || 0),
+		protected_coins: Number(d.protected_coins || 0),
+		select_like: f.select_like.checked,
+		skip_when_lv6: f.skip_when_lv6.checked,
+		share_enabled: f.share_enabled.checked,
+		watch_enabled: f.watch_enabled.checked,
+		support_up_ids: String(d.support_up_ids || "")
+			.split(/[,，\s]+/)
+			.map((s) => Number(s))
+			.filter((n) => Number.isFinite(n) && n > 0),
+	};
+}
+async function openDailyTask(a) {
+	dailyTaskAccountId = a.id;
+	const p = await api(`/api/bili/accounts/${a.id}/daily-task`);
+	fillDailyTaskForm(p);
+	$("#daily-task-panel").classList.remove("hidden");
+	$("#daily-task-panel").scrollIntoView({ behavior: "smooth" });
+	await loadDailyTaskRecords(a.id);
+}
+async function loadDailyTaskRecords(accountId) {
+	const records = await api(
+		`/api/bili/accounts/${accountId}/daily-task-records`,
+	);
+	$("#daily-task-records").replaceChildren(
+		...records.map((r) => {
+			const tr = el("tr");
+			[
+				r.task_date,
+				r.status,
+				`${r.coins_donated}/${r.target_coins}`,
+				r.share_done ? "√" : "—",
+				r.watch_done ? "√" : "—",
+				r.message || "-",
+			].forEach((v) => tr.append(el("td", v)));
+			return tr;
+		}),
+	);
+}
+$("#daily-task-form").onsubmit = async (e) => {
+	e.preventDefault();
+	if (!dailyTaskAccountId) return;
+	if (
+		confirm("保存后将按新配置执行每日任务；投币会消耗硬币，请确认配置无误。")
+	) {
+		await api(`/api/bili/accounts/${dailyTaskAccountId}/daily-task`, {
+			method: "PUT",
+			body: JSON.stringify(collectDailyTaskForm()),
+		});
+		toast("每日任务配置已保存");
+		await loadDailyTaskRecords(dailyTaskAccountId);
+		loadJobs();
+	}
+};
+$("#channel-form").onsubmit = async (e) => {
+	e.preventDefault();
+	const v = values(e.target);
+	await api("/api/notifications/channels", {
+		method: "POST",
+		body: JSON.stringify({
+			name: v.name,
+			provider: v.provider,
+			config: channelConfig(v),
+			event_types: events,
+			enabled: true,
+		}),
+	});
+	e.target.reset();
+	toast("渠道已保存");
+	loadChannels();
+};
+async function loadChannels() {
+	const [channels, deliveries] = await Promise.all([
+		api("/api/notifications/channels"),
+		api("/api/notifications/deliveries"),
+	]);
+	$("#channel-list").replaceChildren(
+		...channels.map((c) => {
+			const n = el("article", undefined, "card");
+			n.append(
+				el("h3", c.name),
+				el("p", c.provider, "badge"),
+				el("p", c.event_types.join("、"), "muted"),
+				button(c.enabled ? "停用" : "启用", async () => {
+					await api(
+						`/api/notifications/channels/${c.id}/enabled?enabled=${!c.enabled}`,
+						{ method: "PATCH" },
+					);
+					loadChannels();
+				}),
+				button("测试", async () => {
+					const r = await api(`/api/notifications/channels/${c.id}/test`, {
+						method: "POST",
+					});
+					toast(`测试结果：${r.status}`);
+				}),
+				button(
+					"删除",
+					async () => {
+						if (confirm("确定删除渠道？")) {
+							await api(`/api/notifications/channels/${c.id}`, {
+								method: "DELETE",
+							});
+							loadChannels();
+						}
+					},
+					"danger",
+				),
+			);
+			return n;
+		}),
+	);
+	$("#delivery-list").replaceChildren(
+		...deliveries.map((d) => {
+			const tr = el("tr");
+			[
+				d.status,
+				d.channel_id,
+				d.attempts,
+				d.response_summary || d.error_type || "-",
+			].forEach((v) => tr.append(el("td", v)));
+			if (d.status === "failed") {
+				const td = el("td");
+				td.append(
+					button("重试", () =>
+						api(`/api/notifications/deliveries/${d.id}/retry`, {
+							method: "POST",
+						}),
+					),
+				);
+				tr.append(td);
+			}
+			return tr;
+		}),
+	);
+}
+async function copyText(text) {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch {}
+	const input = el("textarea");
+	input.value = text;
+	input.style.position = "fixed";
+	input.style.opacity = "0";
+	document.body.append(input);
+	input.select();
+	let copied = false;
+	try {
+		copied = document.execCommand("copy");
+	} catch {}
+	input.remove();
+	if (!copied) throw new Error("无法访问剪贴板，请手动复制");
+	return true;
+}
+function showCreatedShare(url, copied) {
+	let panel = $("#created-share");
+	if (!panel) {
+		panel = el("article", undefined, "panel");
+		panel.id = "created-share";
+		$("#share-form").parentElement.append(panel);
+	}
+	const input = el("input");
+	input.value = url;
+	input.readOnly = true;
+	input.setAttribute("aria-label", "新创建的分享链接");
+	panel.replaceChildren(
+		el(
+			"p",
+			copied
+				? "分享链接已复制；也可在此手动复制："
+				: "无法访问剪贴板，请手动复制：",
+			"muted",
+		),
+		input,
+		button("复制链接", async () => {
+			await copyText(url);
+			toast("链接已复制");
+		}),
+	);
+}
+$("#share-form").onsubmit = async (e) => {
+	e.preventDefault();
+	const v = values(e.target);
+	v.expires_hours = Number(v.expires_hours);
+	v.mask_names = true;
+	v.mask_uids = true;
+	const r = await api("/api/dashboard/shares", {
+		method: "POST",
+		body: JSON.stringify(v),
+	});
+	const url = r.share_url;
+	let copied = false;
+	try {
+		await copyText(url);
+		copied = true;
+	} catch {}
+	showCreatedShare(url, copied);
+	toast(copied ? "链接已复制" : "分享已创建，请手动复制链接");
+	loadShares();
+};
+async function loadShares() {
+	const items = await api("/api/dashboard/shares");
+	$("#share-list").replaceChildren(
+		...items.map((s) => {
+			const c = el("article", undefined, "card");
+			const status = s.active ? "有效" : s.revoked_at ? "已撤销" : "已过期";
+			c.append(
+				el("h3", s.password_protected ? "密码分享" : "公开分享"),
+				el("p", `${status} · 到期：${formatTime(s.expires_at)}`, "muted"),
+			);
+			if (s.active && s.share_url) {
+				c.append(
+					button("复制链接", async () => {
+						await copyText(s.share_url);
+						toast("链接已复制");
+					}),
+				);
+			} else if (s.active && s.legacy) {
+				c.append(
+					button("重新生成链接", async () => {
+						const r = await api(`/api/dashboard/shares/${s.id}/regenerate`, {
+							method: "POST",
+						});
+						await copyText(r.share_url);
+						toast("链接已复制");
+						loadShares();
+					}),
+				);
+			}
+			if (s.active)
+				c.append(
+					button(
+						"撤销",
+						async () => {
+							await api(`/api/dashboard/shares/${s.id}`, { method: "DELETE" });
+							loadShares();
+						},
+						"danger",
+					),
+				);
+			return c;
+		}),
+	);
+}
+$("#password-form").onsubmit = async (e) => {
+	e.preventDefault();
+	showFormError(e.target);
+	try {
+		await api("/api/auth/change-password", {
+			method: "POST",
+			body: JSON.stringify(values(e.target)),
+		});
+		e.target.reset();
+		toast("密码已修改，其他会话已退出");
+	} catch (error) {
+		showFormError(e.target, error.message);
+	}
+};
+$("#user-form").onsubmit = async (e) => {
+	e.preventDefault();
+	await api("/api/users", {
+		method: "POST",
+		body: JSON.stringify(values(e.target)),
+	});
+	e.target.reset();
+	loadUsers();
+};
+async function loadUsers() {
+	const items = await api("/api/users");
+	$("#user-list").replaceChildren(
+		...items.map((u) => {
+			const row = el("div", undefined, "row panel");
+			row.append(
+				el("span", `${u.username} · ${u.role}`),
+				button(
+					u.is_active ? "停用" : "启用",
+					async () => {
+						await api(`/api/users/${u.id}`, {
+							method: "PATCH",
+							body: JSON.stringify({ is_active: !u.is_active }),
+						});
+						loadUsers();
+					},
+					u.is_active ? "danger" : "secondary",
+				),
+				button("重置密码", async () => {
+					const p = prompt("输入新密码");
+					if (p) {
+						await api(`/api/users/${u.id}/reset-password`, {
+							method: "POST",
+							body: JSON.stringify({ new_password: p }),
+						});
+						toast("密码已重置");
+					}
+				}),
+			);
+			return row;
+		}),
+	);
+}
+$("#logout").onclick = async () => {
+	await api("/api/auth/logout", { method: "POST" });
+	navigateSameOrigin("/login");
+};
+(async () => {
+	try {
+		me = await api("/api/auth/me");
+		$("#identity").textContent = `${me.username} · ${me.role}`;
+		if (me.role === "admin") $("#admin-users").classList.remove("hidden");
+		await loadDashboard();
+	} catch (e) {
+		if (!["auth_required", "session_expired"].includes(e.code))
+			toast(e.message, true);
+	}
+})();

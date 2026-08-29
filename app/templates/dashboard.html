@@ -109,7 +109,19 @@
       </section>
       <section id="jobs" class="view">
         <div id="job-list" class="grid"></div>
-        <section class="panel records"><h2>运行历史</h2><table><thead><tr><th>状态</th><th>任务</th><th>开始</th><th>耗时/错误</th></tr></thead><tbody id="run-list"></tbody></table></section>
+        <section class="panel records">
+          <h2>任务执行审计</h2>
+          <form id="run-filters" class="form-grid compact">
+            <select name="account_id"><option value="">全部 B 站账号</option></select>
+            <select name="kind"><option value="">全部任务</option><option value="charge_collection">充电记录采集</option><option value="daily_task">每日任务</option><option value="notification_retry">通知失败重试</option><option value="coupon_claim">B 币券领取</option></select>
+            <select name="status"><option value="">全部状态</option><option value="succeeded">成功</option><option value="failed">失败</option><option value="skipped">跳过 / 无操作</option><option value="partial_success">部分成功</option></select>
+            <select name="trigger_type"><option value="">全部触发</option><option value="scheduled">定时</option><option value="manual">人工</option><option value="retry">重试</option><option value="reconciliation">对账 / 恢复</option></select>
+            <label><input type="checkbox" name="changed_only"> 只看有业务变更</label>
+            <button type="submit">筛选</button>
+          </form>
+          <table><thead><tr><th>状态</th><th>账号</th><th>任务</th><th>触发</th><th>开始</th><th>耗时</th><th>执行摘要</th></tr></thead><tbody id="run-list"></tbody></table>
+        </section>
+        <dialog id="run-detail"><article><button type="button" class="dialog-close">关闭</button><h2>执行详情</h2><div id="run-detail-body"></div></article></dialog>
       </section>
       <section id="notifications" class="view">
         <section class="panel"><h2>新建通知渠道</h2><form id="channel-form" class="form-grid"><input name="name" placeholder="渠道名称" required><select name="provider"><option value="feishu">飞书</option><option value="telegram">Telegram</option><option value="serverchan">Server酱</option><option value="webhook">通用 Webhook</option></select><input name="endpoint" placeholder="Webhook URL / Bot Token / SendKey" required><input name="chat_id" placeholder="Telegram Chat ID"><button>保存</button></form></section>

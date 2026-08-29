@@ -164,8 +164,15 @@ class ChargeCollectionService:
     ) -> CollectionResult:
         run = db.get(JobRun, run_id) if run_id else None
         if run is None:
-            run = JobRun(user_id=account.user_id, schedule_job_id=schedule_job_id)
+            run = JobRun(
+                user_id=account.user_id,
+                schedule_job_id=schedule_job_id,
+                bili_account_id=account.id,
+                trigger_type="manual" if schedule_job_id is None else "scheduled",
+            )
             db.add(run)
+        else:
+            run.bili_account_id = account.id
         run.status = RunStatus.RUNNING
         run.started_at = datetime.now(UTC)
         db.commit()
@@ -237,10 +244,17 @@ class ChargeCollectionService:
             run.status = RunStatus.SUCCEEDED
             run.result = {
                 "pages": pages,
-                "seen": seen,
+                "scanned": seen,
                 "inserted": inserted,
+                "updated": 0,
                 "duplicates_skipped": duplicates_skipped,
                 "historical_suppressed": historical_suppressed,
+                "no_op": inserted == 0,
+                "conclusion": (
+                    "扫描完成，发现并保存新充电记录"
+                    if inserted
+                    else "扫描完成，无新增充电记录"
+                ),
             }
             return CollectionResult(
                 run.id,
@@ -258,6 +272,7 @@ class ChargeCollectionService:
                 job.enabled = False
                 job.next_run_at = None
             run.status = RunStatus.FAILED
+            run.error_type = "authentication_expired"
             run.error = "Bilibili account authentication expired"
             enqueue_event(
                 db,
@@ -276,6 +291,7 @@ class ChargeCollectionService:
             raise
         except Exception as exc:
             run.status = RunStatus.FAILED
+            run.error_type = type(exc).__name__
             run.error = str(exc)[:1000]
             enqueue_event(
                 db,
