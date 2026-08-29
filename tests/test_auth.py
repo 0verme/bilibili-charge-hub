@@ -68,6 +68,27 @@ def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Se
     response = client.post("/api/auth/login", json=credentials)
     assert response.status_code == 200
     assert response.json()["username"] == "owner"
+    assert all("Secure" not in value for value in response.headers.get_list("set-cookie"))
+
+
+def test_auth_cookies_follow_request_scheme(db_factory: sessionmaker[Session]) -> None:
+    app = create_app()
+
+    def override_db() -> Generator[Session, None, None]:
+        with db_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    credentials = {"username": "owner", "password": "correct-horse-42"}
+    with TestClient(app, base_url="http://testserver") as http_client:
+        response = http_client.post("/api/auth/setup", json=credentials)
+        assert response.status_code == 201
+        assert all("Secure" not in value for value in response.headers.get_list("set-cookie"))
+
+    with TestClient(app, base_url="https://testserver") as https_client:
+        response = https_client.post("/api/auth/login", json=credentials)
+        assert response.status_code == 200
+        assert all("Secure" in value for value in response.headers.get_list("set-cookie"))
 
 
 def test_setup_is_one_time_and_admin_can_create_user(client: TestClient) -> None:
