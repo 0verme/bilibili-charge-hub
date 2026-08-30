@@ -94,9 +94,7 @@ def test_share_is_random_expiring_password_protected_and_masked(dashboard_env) -
     assert len(token) > 30
     assert client.get(f"/api/share/{token}").status_code == 401
     assert client.get(f"/share/{token}").status_code == 200
-    unlocked = client.post(
-        f"/api/share/{token}/unlock", json={"password": "share-pass-42"}
-    )
+    unlocked = client.post(f"/api/share/{token}/unlock", json={"password": "share-pass-42"})
     assert unlocked.status_code == 204
     response = client.get(f"/api/share/{token}")
     assert response.status_code == 200
@@ -122,8 +120,7 @@ def test_share_url_is_repeatable_and_revocation_is_immediate(dashboard_env) -> N
 
     assert client.delete(f"/api/dashboard/shares/{item['id']}").status_code == 204
     revoked = next(
-        share for share in client.get("/api/dashboard/shares").json()
-        if share["id"] == item["id"]
+        share for share in client.get("/api/dashboard/shares").json() if share["id"] == item["id"]
     )
     assert revoked["active"] is False
     assert revoked["share_url"] is None
@@ -135,23 +132,32 @@ def test_expired_and_legacy_shares_do_not_expose_access_urls(dashboard_env) -> N
     with factory() as db:
         user = db.query(User).filter_by(username="owner").one()
         legacy_token = "legacy-random-token"
-        db.add(DashboardShare(
-            id=new_id(), user_id=user.id, token_hash=hash_session_token(legacy_token),
-            password_hash=None, expires_at=datetime.now(UTC) + timedelta(hours=1),
-            mask_names=True, mask_uids=True,
-        ))
-        db.add(DashboardShare(
-            id=new_id(), user_id=user.id, token_hash=hash_session_token("expired-token"),
-            password_hash=None, expires_at=datetime.now(UTC) - timedelta(seconds=1),
-            mask_names=True, mask_uids=True,
-        ))
+        db.add(
+            DashboardShare(
+                id=new_id(),
+                user_id=user.id,
+                token_hash=hash_session_token(legacy_token),
+                password_hash=None,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                mask_names=True,
+                mask_uids=True,
+            )
+        )
+        db.add(
+            DashboardShare(
+                id=new_id(),
+                user_id=user.id,
+                token_hash=hash_session_token("expired-token"),
+                password_hash=None,
+                expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                mask_names=True,
+                mask_uids=True,
+            )
+        )
         db.commit()
     shares = client.get("/api/dashboard/shares").json()
     legacy = next(share for share in shares if share["legacy"])
-    expired = next(
-        share for share in shares
-        if not share["active"] and share["id"] != legacy["id"]
-    )
+    expired = next(share for share in shares if not share["active"] and share["id"] != legacy["id"])
     assert legacy["share_url"] is None and legacy["active"]
     assert expired["share_url"] is None and not expired["active"]
     regenerated = client.post(f"/api/dashboard/shares/{legacy['id']}/regenerate")
@@ -247,7 +253,7 @@ def test_csv_export_neutralizes_spreadsheet_formulas(dashboard_env) -> None:
                 event_id="formula",
                 record_key="formula",
                 supporter_uid="+10003",
-                supporter_name="=HYPERLINK(\"https://example.invalid\")",
+                supporter_name='=HYPERLINK("https://example.invalid")',
                 amount=Decimal("1.00"),
                 brokerage=Decimal("0.70"),
                 charged_at=datetime.now(UTC),
@@ -326,9 +332,7 @@ def test_share_access_signature_has_server_side_expiry(dashboard_env) -> None:
 
 def test_share_unlock_is_rate_limited_by_client_and_token(dashboard_env) -> None:
     client, _ = dashboard_env
-    first = client.post(
-        "/api/dashboard/shares", json={"password": "first-share-pass-42"}
-    ).json()
+    first = client.post("/api/dashboard/shares", json={"password": "first-share-pass-42"}).json()
     path = f"/api/share/{first['token']}/unlock"
     for _ in range(5):
         response = client.post(path, json={"password": "incorrect"})
@@ -339,9 +343,7 @@ def test_share_unlock_is_rate_limited_by_client_and_token(dashboard_env) -> None
     assert limited.json()["detail"]["code"] == "rate_limited"
     assert limited.headers["retry-after"] == "300"
 
-    second = client.post(
-        "/api/dashboard/shares", json={"password": "second-share-pass-42"}
-    ).json()
+    second = client.post("/api/dashboard/shares", json={"password": "second-share-pass-42"}).json()
     other_token = client.post(
         f"/api/share/{second['token']}/unlock", json={"password": "incorrect"}
     )

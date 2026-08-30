@@ -53,9 +53,11 @@ class DailyTaskOutcome:
 def local_task_date(now: datetime | None = None) -> str:
     from zoneinfo import ZoneInfo
 
-    return (now or datetime.now(UTC)).astimezone(
-        ZoneInfo(get_settings().app_timezone)
-    ).strftime("%Y-%m-%d")
+    return (
+        (now or datetime.now(UTC))
+        .astimezone(ZoneInfo(get_settings().app_timezone))
+        .strftime("%Y-%m-%d")
+    )
 
 
 class DailyTaskService:
@@ -398,9 +400,7 @@ class DailyTaskService:
             )
             if result.success:
                 success += 1
-                done_videos.append(
-                    {"aid": video.aid, "bvid": video.bvid, "title": video.title}
-                )
+                done_videos.append({"aid": video.aid, "bvid": video.bvid, "title": video.title})
             elif not result.retriable:
                 break
         try:

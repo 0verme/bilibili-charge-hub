@@ -51,9 +51,9 @@ def local_period_boundaries(now: datetime | None = None) -> tuple[datetime, date
     timezone = ZoneInfo(get_settings().app_timezone)
     local_now = (now or datetime.now(UTC)).astimezone(timezone)
     today = datetime.combine(local_now.date(), time.min, tzinfo=timezone).astimezone(UTC)
-    month = datetime.combine(
-        local_now.date().replace(day=1), time.min, tzinfo=timezone
-    ).astimezone(UTC)
+    month = datetime.combine(local_now.date().replace(day=1), time.min, tzinfo=timezone).astimezone(
+        UTC
+    )
     return today, month
 
 
@@ -173,8 +173,7 @@ def dashboard_payload(
             "supporters": totals[2],
         },
         "trend": [
-            {"date": day, "amount": str(amount)}
-            for day, amount in sorted(trend_totals.items())
+            {"date": day, "amount": str(amount)} for day, amount in sorted(trend_totals.items())
         ],
         "top_supporters": [
             {
@@ -261,8 +260,12 @@ def export_csv(
     max_amount: Decimal | None = None,
 ) -> StreamingResponse:
     filters = DashboardFilters(
-        account_id=account_id, start=start, end=end, search=search,
-        min_amount=min_amount, max_amount=max_amount,
+        account_id=account_id,
+        start=start,
+        end=end,
+        search=search,
+        min_amount=min_amount,
+        max_amount=max_amount,
     )
 
     def safe_text(value: object) -> str:
@@ -356,7 +359,8 @@ class ShareView(BaseModel):
 @router.get("/api/dashboard/shares", response_model=list[ShareView])
 def list_shares(request: Request, user: CurrentUser, db: DbSession) -> list[ShareView]:  # type: ignore
     shares = db.scalars(
-        select(DashboardShare).where(DashboardShare.user_id == user.id)
+        select(DashboardShare)
+        .where(DashboardShare.user_id == user.id)
         .order_by(DashboardShare.created_at.desc())
     )
     now = datetime.now(UTC)
@@ -370,9 +374,13 @@ def list_shares(request: Request, user: CurrentUser, db: DbSession) -> list[Shar
             active=item.revoked_at is None and as_utc(item.expires_at) > now,
             legacy=item.token_scheme != SHARE_TOKEN_SCHEME,
             revoked_at=as_utc(item.revoked_at) if item.revoked_at else None,
-            share_url=(public_share_url(request, share_token(item.id))
-                       if item.token_scheme == SHARE_TOKEN_SCHEME
-                       and item.revoked_at is None and as_utc(item.expires_at) > now else None),
+            share_url=(
+                public_share_url(request, share_token(item.id))
+                if item.token_scheme == SHARE_TOKEN_SCHEME
+                and item.revoked_at is None
+                and as_utc(item.expires_at) > now
+                else None
+            ),
         )
         for item in shares
     ]
@@ -380,9 +388,11 @@ def list_shares(request: Request, user: CurrentUser, db: DbSession) -> list[Shar
 
 @router.delete("/api/dashboard/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_share(share_id: str, user: CurrentUser, db: DbSession) -> None:  # type: ignore
-    share = db.scalar(select(DashboardShare).where(
-        DashboardShare.id == share_id, DashboardShare.user_id == user.id
-    ))
+    share = db.scalar(
+        select(DashboardShare).where(
+            DashboardShare.id == share_id, DashboardShare.user_id == user.id
+        )
+    )
     if share is None:
         raise_api_error(status.HTTP_404_NOT_FOUND, "share_not_found", "share not found")
     share.revoked_at = datetime.now(UTC)
@@ -391,11 +401,16 @@ def delete_share(share_id: str, user: CurrentUser, db: DbSession) -> None:  # ty
 
 @router.post("/api/dashboard/shares/{share_id}/regenerate", response_model=ShareView)
 def regenerate_share(
-    share_id: str, request: Request, user: CurrentUser, db: DbSession  # type: ignore
+    share_id: str,
+    request: Request,
+    user: CurrentUser,
+    db: DbSession,  # type: ignore
 ) -> ShareView:
-    share = db.scalar(select(DashboardShare).where(
-        DashboardShare.id == share_id, DashboardShare.user_id == user.id
-    ))
+    share = db.scalar(
+        select(DashboardShare).where(
+            DashboardShare.id == share_id, DashboardShare.user_id == user.id
+        )
+    )
     if (
         share is None
         or share.revoked_at is not None
@@ -406,10 +421,17 @@ def regenerate_share(
     token = share_token(share.id)
     share.token_hash = hash_session_token(token)
     db.commit()
-    return ShareView(id=share.id, expires_at=as_utc(share.expires_at), mask_names=share.mask_names,
-                     mask_uids=share.mask_uids, password_protected=share.password_hash is not None,
-                     active=True, legacy=False, revoked_at=None,
-                     share_url=public_share_url(request, token))
+    return ShareView(
+        id=share.id,
+        expires_at=as_utc(share.expires_at),
+        mask_names=share.mask_names,
+        mask_uids=share.mask_uids,
+        password_protected=share.password_hash is not None,
+        active=True,
+        legacy=False,
+        revoked_at=None,
+        share_url=public_share_url(request, token),
+    )
 
 
 def get_share(db: DbSession, token: str) -> DashboardShare:  # type: ignore
@@ -486,7 +508,8 @@ class ShareUnlock(BaseModel):
 def share_page(token: str, request: Request, db: DbSession) -> HTMLResponse:  # type: ignore
     share = get_share(db, token)
     return request.app.state.templates.TemplateResponse(
-        request=request, name="share.html",
+        request=request,
+        name="share.html",
         context={"token": token, "password_required": share.password_hash is not None},
     )
 

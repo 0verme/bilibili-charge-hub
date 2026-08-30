@@ -66,9 +66,7 @@ def test_migration_readiness_requires_exactly_one_matching_head(
         upgrade_database(monkeypatch, path, "head")
         current = check_migration_readiness(engine)
         assert current.ready
-        assert current.current_heads == current.expected_heads == (
-            "0007_repeatable_dashboard_shares",
-        )
+        assert current.current_heads == current.expected_heads == get_code_heads()
 
         code_multiple = check_migration_readiness(engine, expected_heads=("code-a", "code-b"))
         assert not code_multiple.ready
@@ -105,7 +103,7 @@ def test_lagging_database_keeps_scheduler_stopped_and_readyz_fails_closed(
             assert response.json()["checks"]["migration"] == {
                 "status": "not_ready",
                 "current_heads": ["0002_dashboard_shares"],
-                "expected_heads": ["0007_repeatable_dashboard_shares"],
+                "expected_heads": list(get_code_heads()),
                 "reason": "revision_mismatch",
             }
             assert response.json()["checks"]["scheduler"] == "unavailable"
@@ -268,7 +266,7 @@ def test_0002_to_head_upgrade_preserves_existing_data(
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == "0007_repeatable_dashboard_shares"
+            assert revision == get_code_heads()[0]
         with Session(engine) as session:
             assert session.scalar(select(ScheduleJob).where(ScheduleJob.id == "job-keep")).kind == (
                 JobKind.CHARGE_COLLECTION
@@ -351,9 +349,7 @@ def test_0006_merges_legacy_name_variants_and_preserves_delivery_audit(
     now = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
     def dedupe(event_id: str) -> str:
-        return hashlib.sha256(
-            f"user-1|charge:account-1:{event_id}".encode()
-        ).hexdigest()
+        return hashlib.sha256(f"user-1|charge:account-1:{event_id}".encode()).hexdigest()
 
     try:
         with engine.begin() as connection:
@@ -463,37 +459,51 @@ def test_0006_merges_legacy_name_variants_and_preserves_delivery_audit(
         upgrade_database(monkeypatch, path, "head")
 
         with engine.connect() as connection:
-            charge_rows = connection.execute(
-                text(
-                    "SELECT id, supporter_name, avatar_url, record_key, "
-                    "notification_eligible FROM charge_records ORDER BY id"
+            charge_rows = (
+                connection.execute(
+                    text(
+                        "SELECT id, supporter_name, avatar_url, record_key, "
+                        "notification_eligible FROM charge_records ORDER BY id"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             assert len(charge_rows) == 1
             assert charge_rows[0]["supporter_name"] == "Alice"
             assert charge_rows[0]["avatar_url"] == "https://example.invalid/alice.jpg"
             assert len(charge_rows[0]["record_key"]) == 64
             assert not charge_rows[0]["notification_eligible"]
 
-            merged = connection.execute(
-                text(
-                    "SELECT id, status, merged_into_outbox_id "
-                    "FROM notification_outbox ORDER BY id"
+            merged = (
+                connection.execute(
+                    text(
+                        "SELECT id, status, merged_into_outbox_id "
+                        "FROM notification_outbox ORDER BY id"
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
             assert len(merged) == 2
             merged_row = next(row for row in merged if row["id"] == "outbox-2")
             assert merged_row["status"] == "merged"
             assert merged_row["merged_into_outbox_id"] == "outbox-1"
-            assert connection.execute(
-                text(
-                    "SELECT COUNT(*) FROM notification_outbox "
-                    "WHERE id = 'outbox-2' AND status IN ('pending', 'retry')"
-                )
-            ).scalar_one() == 0
-            assert connection.execute(
-                text("SELECT COUNT(*) FROM notification_deliveries")
-            ).scalar_one() == 2
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM notification_outbox "
+                        "WHERE id = 'outbox-2' AND status IN ('pending', 'retry')"
+                    )
+                ).scalar_one()
+                == 0
+            )
+            assert (
+                connection.execute(
+                    text("SELECT COUNT(*) FROM notification_deliveries")
+                ).scalar_one()
+                == 2
+            )
     finally:
         engine.dispose()
         clear_runtime_caches()

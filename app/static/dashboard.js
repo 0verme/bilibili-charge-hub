@@ -318,41 +318,128 @@ function renderJobGroup(title, jobs) {
 	return section;
 }
 function runStatusLabel(status) {
-	return { succeeded: "成功", failed: "失败", skipped: "跳过 / 无操作", partial_success: "部分成功", queued: "排队中", running: "运行中" }[status] || status;
+	return (
+		{
+			succeeded: "成功",
+			failed: "失败",
+			skipped: "跳过 / 无操作",
+			partial_success: "部分成功",
+			queued: "排队中",
+			running: "运行中",
+		}[status] || status
+	);
 }
 function runTriggerLabel(trigger) {
-	return { scheduled: "定时", manual: "人工", retry: "重试", reconciliation: "对账 / 恢复" }[trigger] || trigger;
+	return (
+		{
+			scheduled: "定时",
+			manual: "人工",
+			retry: "重试",
+			reconciliation: "对账 / 恢复",
+		}[trigger] || trigger
+	);
 }
 function runAccountLabel(run) {
-	return run.account ? `${run.account.display_name || "未命名账号"} · UID ${run.account.bili_uid}` : "系统任务 / Global";
+	return run.account
+		? `${run.account.display_name || "未命名账号"} · UID ${run.account.bili_uid}`
+		: "系统任务 / Global";
 }
 function runSummary(run) {
 	if (run.result?.conclusion) return run.result.conclusion;
-	return Object.entries(run.result || {}).filter(([k]) => !["conclusion", "no_op"].includes(k)).map(([k, v]) => `${k}: ${v}`).join(" · ") || "暂无结果数据";
+	return (
+		Object.entries(run.result || {})
+			.filter(([k]) => !["conclusion", "no_op"].includes(k))
+			.map(([k, v]) => `${k}: ${v}`)
+			.join(" · ") || "暂无结果数据"
+	);
 }
 async function openRunDetail(runId) {
 	const run = await api(`/api/job-runs/${runId}`);
 	const body = $("#run-detail-body");
 	body.replaceChildren();
-	const fields = { 任务: run.task_name || run.task_key, 账号: runAccountLabel(run), "Execution ID": run.id, "Scheduler Job ID": run.schedule_job_id || "-", 触发: runTriggerLabel(run.trigger_type), 计划时间: run.scheduled_at ? formatTime(run.scheduled_at) : "-", 开始: formatTime(run.started_at), 结束: run.finished_at ? formatTime(run.finished_at) : "-", 耗时: `${run.duration_ms ?? "-"} ms`, 状态: runStatusLabel(run.status), 结论: runSummary(run), 错误类型: run.error_type || "-", 错误信息: run.error || "-" };
-	Object.entries(fields).forEach(([key, value]) => { const p = el("p"); p.append(el("strong", `${key}：`), el("span", value)); body.append(p); });
-	const details = el("details"), summary = el("summary", "结构化结果 / 关联信息");
-	details.append(summary, el("pre", JSON.stringify(run.result || {}, null, 2))); body.append(details);
+	const fields = {
+		任务: run.task_name || run.task_key,
+		账号: runAccountLabel(run),
+		"Execution ID": run.id,
+		"Scheduler Job ID": run.schedule_job_id || "-",
+		触发: runTriggerLabel(run.trigger_type),
+		计划时间: run.scheduled_at ? formatTime(run.scheduled_at) : "-",
+		开始: formatTime(run.started_at),
+		结束: run.finished_at ? formatTime(run.finished_at) : "-",
+		耗时: `${run.duration_ms ?? "-"} ms`,
+		状态: runStatusLabel(run.status),
+		结论: runSummary(run),
+		错误类型: run.error_type || "-",
+		错误信息: run.error || "-",
+	};
+	Object.entries(fields).forEach(([key, value]) => {
+		const p = el("p");
+		p.append(el("strong", `${key}：`), el("span", value));
+		body.append(p);
+	});
+	const details = el("details"),
+		summary = el("summary", "结构化结果 / 关联信息");
+	details.append(summary, el("pre", JSON.stringify(run.result || {}, null, 2)));
+	body.append(details);
 	$("#run-detail").showModal();
 }
 async function loadJobs() {
 	const filter = $("#run-filters");
-	const params = filter ? new URLSearchParams(values(filter)) : new URLSearchParams();
+	const params = filter
+		? new URLSearchParams(values(filter))
+		: new URLSearchParams();
 	if (filter?.changed_only?.checked) params.set("changed_only", "true");
-	const [jobs, runs, accounts] = await Promise.all([api("/api/jobs"), api(`/api/job-runs?${params}`), api("/api/bili/accounts")]);
+	const [jobs, runs, accounts] = await Promise.all([
+		api("/api/jobs"),
+		api(`/api/job-runs?${params}`),
+		api("/api/bili/accounts"),
+	]);
 	const accountSelect = filter?.account_id;
-	if (accountSelect && accountSelect.options.length === 1) accounts.forEach((a) => { const option = el("option", `${a.display_name || "未命名账号"} · UID ${a.bili_uid}`); option.value = a.id; accountSelect.append(option); });
+	if (accountSelect && accountSelect.options.length === 1)
+		accounts.forEach((a) => {
+			const option = el(
+				"option",
+				`${a.display_name || "未命名账号"} · UID ${a.bili_uid}`,
+			);
+			option.value = a.id;
+			accountSelect.append(option);
+		});
 	const groups = new Map();
-	jobs.forEach((j) => { const key = j.account?.id || "tenant"; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(j); });
-	$("#job-list").replaceChildren(...[...groups].map(([key, items]) => renderJobGroup(key === "tenant" ? "租户级任务 · 通知中心" : jobAccountLabel(items[0]), items)));
-	$("#run-list").replaceChildren(...runs.map((r) => { const tr = el("tr"); tr.onclick = () => openRunDetail(r.id).catch((e) => toast(e.message, true)); [runStatusLabel(r.status), runAccountLabel(r), r.task_name || r.task_key || "系统任务", runTriggerLabel(r.trigger_type), formatTime(r.started_at), `${r.duration_ms ?? "-"} ms`, runSummary(r)].forEach((v) => tr.append(el("td", v))); return tr; }));
+	jobs.forEach((j) => {
+		const key = j.account?.id || "tenant";
+		if (!groups.has(key)) groups.set(key, []);
+		groups.get(key).push(j);
+	});
+	$("#job-list").replaceChildren(
+		...[...groups].map(([key, items]) =>
+			renderJobGroup(
+				key === "tenant" ? "租户级任务 · 通知中心" : jobAccountLabel(items[0]),
+				items,
+			),
+		),
+	);
+	$("#run-list").replaceChildren(
+		...runs.map((r) => {
+			const tr = el("tr");
+			tr.onclick = () =>
+				openRunDetail(r.id).catch((e) => toast(e.message, true));
+			[
+				runStatusLabel(r.status),
+				runAccountLabel(r),
+				r.task_name || r.task_key || "系统任务",
+				runTriggerLabel(r.trigger_type),
+				formatTime(r.started_at),
+				`${r.duration_ms ?? "-"} ms`,
+				runSummary(r),
+			].forEach((v) => tr.append(el("td", v)));
+			return tr;
+		}),
+	);
 }
-$("#run-filters")?.addEventListener("submit", (event) => { event.preventDefault(); loadJobs().catch((e) => toast(e.message, true)); });
+$("#run-filters")?.addEventListener("submit", (event) => {
+	event.preventDefault();
+	loadJobs().catch((e) => toast(e.message, true));
+});
 $(".dialog-close")?.addEventListener("click", () => $("#run-detail").close());
 const events = [
 	"new_charge",

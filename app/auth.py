@@ -17,9 +17,7 @@ SessionToken: TypeAlias = Annotated[str | None, Cookie()]
 def has_active_admin(db: Session) -> bool:
     return (
         db.scalar(
-            select(User.id)
-            .where(User.role == UserRole.ADMIN, User.is_active.is_(True))
-            .limit(1)
+            select(User.id).where(User.role == UserRole.ADMIN, User.is_active.is_(True)).limit(1)
         )
         is not None
     )

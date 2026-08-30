@@ -102,15 +102,12 @@ def render_message(event: NotificationOutbox) -> str:
         try:
             parsed = datetime.fromisoformat(charged_at.replace("Z", "+00:00"))
             parsed = parsed.replace(tzinfo=parsed.tzinfo or UTC)
-            charged_at = parsed.astimezone(
-                ZoneInfo(get_settings().app_timezone)
-            ).strftime("%Y-%m-%d %H:%M:%S")
+            charged_at = parsed.astimezone(ZoneInfo(get_settings().app_timezone)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
         except ValueError:
             pass
-        return (
-            f"【{supporter}】 在 【{charged_at}】\n"
-            f"冲了 {amount}B币 实际到账 {brokerage} 元"
-        )
+        return f"【{supporter}】 在 【{charged_at}】\n冲了 {amount}B币 实际到账 {brokerage} 元"
     title = {
         "collection_failed": "充电记录采集失败",
         "cookie_expired": "B 站登录状态已失效",
@@ -171,9 +168,13 @@ class NotificationDeliveryService:
                 if event.attempts >= MAX_ATTEMPTS and before < MAX_ATTEMPTS:
                     budget_exceeded += 1
         return {
-            "scanned": len(events), "retry_eligible": len(events), "retried": len(events),
-            "succeeded": succeeded, "still_failed": still_failed,
-            "retry_budget_exceeded": budget_exceeded, "skipped": 0,
+            "scanned": len(events),
+            "retry_eligible": len(events),
+            "retried": len(events),
+            "succeeded": succeeded,
+            "still_failed": still_failed,
+            "retry_budget_exceeded": budget_exceeded,
+            "skipped": 0,
             "outbox_ids": outbox_ids,
         }
 

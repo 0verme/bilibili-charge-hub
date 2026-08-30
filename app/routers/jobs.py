@@ -229,9 +229,7 @@ async def run_job_now(
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_job(
-    job_id: str, user: CurrentUser, db: DbSession, scheduler: SchedulerDep
-) -> None:
+def delete_job(job_id: str, user: CurrentUser, db: DbSession, scheduler: SchedulerDep) -> None:
     job = db.scalar(
         select(ScheduleJob).where(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id)
     )
@@ -269,25 +267,43 @@ def run_view(db: DbSession, run: JobRun) -> JobRunView:
         JobKind.COUPON_CLAIM: "B 币券领取",
     }
     return JobRunView(
-        id=run.id, schedule_job_id=run.schedule_job_id,
+        id=run.id,
+        schedule_job_id=run.schedule_job_id,
         task_key=job.kind.value if job else None,
         task_name=task_names.get(job.kind, job.kind.value) if job else "系统任务",
-        account=(JobAccountView(id=account.id, display_name=account.display_name,
-                                bili_uid=account.bili_uid, status=account.status.value)
-                 if account else None),
-        trigger_type=run.trigger_type, scheduled_at=run.scheduled_at,
-        status=run.status, started_at=run.started_at, finished_at=run.finished_at,
-        duration_ms=run.duration_ms, result=run.result or {},
-        error_type=run.error_type, error=run.error,
+        account=(
+            JobAccountView(
+                id=account.id,
+                display_name=account.display_name,
+                bili_uid=account.bili_uid,
+                status=account.status.value,
+            )
+            if account
+            else None
+        ),
+        trigger_type=run.trigger_type,
+        scheduled_at=run.scheduled_at,
+        status=run.status,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        duration_ms=run.duration_ms,
+        result=run.result or {},
+        error_type=run.error_type,
+        error=run.error,
     )
 
 
 @runs_router.get("", response_model=list[JobRunView])
 def list_job_runs(
-    user: CurrentUser, db: DbSession, limit: int = 100,
-    account_id: str | None = None, kind: JobKind | None = None,
-    status: RunStatus | None = None, trigger_type: str | None = None,
-    started_after: datetime | None = None, started_before: datetime | None = None,
+    user: CurrentUser,
+    db: DbSession,
+    limit: int = 100,
+    account_id: str | None = None,
+    kind: JobKind | None = None,
+    status: RunStatus | None = None,
+    trigger_type: str | None = None,
+    started_after: datetime | None = None,
+    started_before: datetime | None = None,
     changed_only: bool = False,
 ) -> list[JobRunView]:
     query = select(JobRun).where(JobRun.user_id == user.id)
@@ -302,17 +318,19 @@ def list_job_runs(
     if started_before:
         query = query.where(JobRun.started_at <= started_before)
     if kind:
-        query = query.join(
-            ScheduleJob, JobRun.schedule_job_id == ScheduleJob.id
-        ).where(ScheduleJob.kind == kind)
+        query = query.join(ScheduleJob, JobRun.schedule_job_id == ScheduleJob.id).where(
+            ScheduleJob.kind == kind
+        )
     runs = list(db.scalars(query.order_by(JobRun.started_at.desc()).limit(min(max(limit, 1), 200))))
     if changed_only:
         runs = [
-            r for r in runs
-            if not (r.result or {}).get("no_op") and any(
-                v for k, v in (r.result or {}).items()
-                if k not in {"no_op", "conclusion"}
-                and isinstance(v, (int, float))
+            r
+            for r in runs
+            if not (r.result or {}).get("no_op")
+            and any(
+                v
+                for k, v in (r.result or {}).items()
+                if k not in {"no_op", "conclusion"} and isinstance(v, (int, float))
             )
         ]
     return [run_view(db, run) for run in runs]

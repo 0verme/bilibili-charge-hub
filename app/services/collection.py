@@ -94,8 +94,20 @@ def parse_decimal(value: object) -> Decimal:
 
 def build_charge_record(account: BiliAccount, item: dict) -> ChargeRecord:
     allowed = {
-        "id", "orderNo", "tradeNo", "mid", "uid", "name", "nickname", "avatar",
-        "originalThirdCoin", "amount", "brokerage", "remark", "ctime", "charge_time",
+        "id",
+        "orderNo",
+        "tradeNo",
+        "mid",
+        "uid",
+        "name",
+        "nickname",
+        "avatar",
+        "originalThirdCoin",
+        "amount",
+        "brokerage",
+        "remark",
+        "ctime",
+        "charge_time",
     }
     raw_data = {
         "schema_version": 1,
@@ -206,8 +218,7 @@ class ChargeCollectionService:
                         duplicates_skipped += 1
                         continue
                     record.notification_eligible = bool(
-                        previous_watermark is not None
-                        and record.charged_at > previous_watermark
+                        previous_watermark is not None and record.charged_at > previous_watermark
                     )
                     try:
                         with db.begin_nested():
@@ -251,9 +262,7 @@ class ChargeCollectionService:
                 "historical_suppressed": historical_suppressed,
                 "no_op": inserted == 0,
                 "conclusion": (
-                    "扫描完成，发现并保存新充电记录"
-                    if inserted
-                    else "扫描完成，无新增充电记录"
+                    "扫描完成，发现并保存新充电记录" if inserted else "扫描完成，无新增充电记录"
                 ),
             }
             return CollectionResult(

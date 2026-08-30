@@ -89,7 +89,9 @@ def upgrade() -> None:
         )
     with op.batch_alter_table("notification_outbox") as batch:
         batch.add_column(sa.Column("merged_into_outbox_id", sa.String(36), nullable=True))
-        batch.create_index("ix_notification_outbox_merged_into_outbox_id", ["merged_into_outbox_id"])
+        batch.create_index(
+            "ix_notification_outbox_merged_into_outbox_id", ["merged_into_outbox_id"]
+        )
 
     bind = op.get_bind()
     charge_records = sa.table(
@@ -123,15 +125,10 @@ def upgrade() -> None:
     rows = [
         dict(row)
         for row in bind.execute(
-            sa.select(charge_records).order_by(
-                charge_records.c.created_at, charge_records.c.id
-            )
+            sa.select(charge_records).order_by(charge_records.c.created_at, charge_records.c.id)
         ).mappings()
     ]
-    outboxes = [
-        dict(row)
-        for row in bind.execute(sa.select(notification_outbox)).mappings()
-    ]
+    outboxes = [dict(row) for row in bind.execute(sa.select(notification_outbox)).mappings()]
     outboxes_by_dedupe = {row["dedupe_key"]: row for row in outboxes}
 
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -207,9 +204,7 @@ def upgrade() -> None:
 
         duplicate_ids = [record["id"] for record in records[1:]]
         if duplicate_ids:
-            bind.execute(
-                charge_records.delete().where(charge_records.c.id.in_(duplicate_ids))
-            )
+            bind.execute(charge_records.delete().where(charge_records.c.id.in_(duplicate_ids)))
 
     with op.batch_alter_table("charge_records") as batch:
         batch.alter_column(
