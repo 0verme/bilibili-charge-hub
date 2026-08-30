@@ -149,7 +149,7 @@ def test_expired_and_legacy_shares_do_not_expose_access_urls(dashboard_env) -> N
                 user_id=user.id,
                 token_hash=hash_session_token("expired-token"),
                 password_hash=None,
-                expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                expires_at=datetime.now(UTC) - timedelta(days=1),
                 mask_names=True,
                 mask_uids=True,
             )
