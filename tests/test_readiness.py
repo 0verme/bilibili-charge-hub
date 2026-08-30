@@ -235,11 +235,16 @@ def test_0002_to_head_upgrade_preserves_existing_data(
         account_columns = {
             column["name"] for column in inspect(engine).get_columns("bili_accounts")
         }
+        job_run_columns = {
+            column["name"]: column for column in inspect(engine).get_columns("job_runs")
+        }
         delivery_columns = {
             column["name"] for column in inspect(engine).get_columns("notification_deliveries")
         }
         assert "encrypted_refresh_token" not in account_columns
         assert "collection_watermark_at" in account_columns
+        assert job_run_columns["status"]["type"].length == 14
+        assert job_run_columns["trigger_type"]["nullable"] is False
         assert {"available_at", "error_type"} <= delivery_columns
         with engine.connect() as connection:
             assert (
