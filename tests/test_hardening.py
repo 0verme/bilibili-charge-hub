@@ -118,5 +118,5 @@ def test_dashboard_template_does_not_use_unsafe_dom_rendering() -> None:
 
 def test_dashboard_frontend_redirects_only_for_app_session_errors() -> None:
     content = __import__("pathlib").Path("app/static/dashboard.js").read_text(encoding="utf-8")
-    assert "['session_expired','auth_required'].includes(code)" in content
-    assert "showFormError(e.target,error.message)" in content
+    assert '["session_expired", "auth_required"].includes(code)' in content
+    assert "showFormError(e.target, error.message)" in content

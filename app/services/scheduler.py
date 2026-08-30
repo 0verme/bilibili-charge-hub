@@ -211,18 +211,24 @@ class SchedulerManager:
         with self.factory() as db:
             db.execute(delete(UserSession).where(UserSession.expires_at < now))
             db.execute(delete(QrLoginSession).where(QrLoginSession.expires_at < now))
-            db.execute(delete(NotificationOutbox).where(
-                NotificationOutbox.created_at < cutoff,
-                NotificationOutbox.status.in_(["delivered", "failed"]),
-            ))
-            db.execute(delete(JobRun).where(
-                JobRun.started_at < cutoff,
-                JobRun.status.in_([RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.SKIPPED]),
-            ))
-            stale = db.scalars(select(JobRun).where(
-                JobRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]),
-                JobRun.started_at < now - timedelta(hours=6),
-            ))
+            db.execute(
+                delete(NotificationOutbox).where(
+                    NotificationOutbox.created_at < cutoff,
+                    NotificationOutbox.status.in_(["delivered", "failed"]),
+                )
+            )
+            db.execute(
+                delete(JobRun).where(
+                    JobRun.started_at < cutoff,
+                    JobRun.status.in_([RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.SKIPPED]),
+                )
+            )
+            stale = db.scalars(
+                select(JobRun).where(
+                    JobRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]),
+                    JobRun.started_at < now - timedelta(hours=6),
+                )
+            )
             for run in stale:
                 run.status = RunStatus.FAILED
                 run.error = "run interrupted or timed out"
@@ -346,9 +352,7 @@ class SchedulerManager:
                 run.error = error
                 run.finished_at = finished_at
                 started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
-                run.duration_ms = max(
-                    0, int((finished_at - started_at).total_seconds() * 1000)
-                )
+                run.duration_ms = max(0, int((finished_at - started_at).total_seconds() * 1000))
                 session.commit()
         finally:
             if owned_db:
@@ -400,9 +404,7 @@ class SchedulerManager:
             run.finished_at = datetime.now(UTC)
             started_at = run.started_at.replace(tzinfo=run.started_at.tzinfo or UTC)
             try:
-                run.duration_ms = max(
-                    0, int((run.finished_at - started_at).total_seconds() * 1000)
-                )
+                run.duration_ms = max(0, int((run.finished_at - started_at).total_seconds() * 1000))
             except (TypeError, ValueError, OverflowError):
                 run.duration_ms = 0
             db.commit()

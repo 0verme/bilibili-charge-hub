@@ -15,11 +15,18 @@ def upgrade() -> None:
     # ownership and production databases get the durable constraint.
     if op.get_bind().dialect.name != "sqlite":
         op.create_foreign_key(
-            "fk_job_runs_bili_account_id", "job_runs", "bili_accounts",
-            ["bili_account_id"], ["id"], ondelete="SET NULL"
+            "fk_job_runs_bili_account_id",
+            "job_runs",
+            "bili_accounts",
+            ["bili_account_id"],
+            ["id"],
+            ondelete="SET NULL",
         )
     op.create_index("ix_job_runs_bili_account_id", "job_runs", ["bili_account_id"])
-    op.add_column("job_runs", sa.Column("trigger_type", sa.String(24), nullable=True, server_default="scheduled"))
+    op.add_column(
+        "job_runs",
+        sa.Column("trigger_type", sa.String(24), nullable=True, server_default="scheduled"),
+    )
     op.add_column("job_runs", sa.Column("scheduled_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column("job_runs", sa.Column("error_type", sa.String(128), nullable=True))
 

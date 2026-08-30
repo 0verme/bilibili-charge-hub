@@ -241,12 +241,12 @@ def test_graceful_shutdown_cancels_dispatches_after_deadline(
             _service: NotificationDeliveryService,
             _db: Session,
             _user_id: str | None = None,
-        ) -> int:
+        ) -> dict[str, object]:
             started.set()
             await asyncio.Event().wait()
-            return 0
+            return {}
 
-        monkeypatch.setattr(NotificationDeliveryService, "process_pending", slow_delivery)
+        monkeypatch.setattr(NotificationDeliveryService, "process_pending_summary", slow_delivery)
         manager.start()
         with scheduler_factory() as db:
             run = JobRun(

@@ -47,9 +47,9 @@ def test_dashboard_script_localizes_scheduled_job_names() -> None:
         script = client.get("/static/dashboard.js")
 
     assert script.status_code == 200
-    assert "charge_collection:'充电记录采集'" in script.text
-    assert "coupon_claim:'B 币券领取'" in script.text
-    assert "notification_retry:'通知失败重试'" in script.text
+    assert 'charge_collection: "充电记录采集"' in script.text
+    assert 'coupon_claim: "B 币券领取"' in script.text
+    assert 'notification_retry: "通知失败重试"' in script.text
 
 
 def test_share_script_formats_charge_time_in_application_timezone() -> None:
@@ -83,5 +83,5 @@ def test_internal_dashboard_uses_shared_widgets_and_pagination() -> None:
     assert 'id="supporter-ranking"' in template
     assert 'id="monthly-bars"' in template
     assert 'id="page-size"' in template
-    assert "item.remark||'—'" in script
+    assert 'item.remark || "—"' in script
     assert "widgets.renderSummary" in script
