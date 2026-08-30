@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="Bilibili Charge Hub",
         description="多用户 Bilibili 充电记录、驾驶舱、定时任务与通知中心",
-        version="0.3.1",
+        version="0.4.0",
         lifespan=lifespan,
     )
     application.state.rate_limiter = SlidingWindowLimiter()
