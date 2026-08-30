@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bilibili-charge-hub"
-version = "0.3.1"
+version = "0.4.0"
 description = "Self-hosted multi-user Bilibili charge dashboard and notification hub"
 readme = "README.md"
 license = { text = "MIT" }
