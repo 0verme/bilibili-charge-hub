@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.main import create_app
 from app.models import Base, BiliAccount, ChargeRecord, DashboardShare, User, new_id
-from app.routers.dashboard import issue_share_access, validate_share_access
+from app.routers.dashboard import SHARE_TOKEN_SCHEME, issue_share_access, validate_share_access
 from app.security import hash_session_token
 
 
@@ -147,6 +147,7 @@ def test_expired_and_legacy_shares_do_not_expose_access_urls(dashboard_env) -> N
             DashboardShare(
                 id=new_id(),
                 user_id=user.id,
+                token_scheme=SHARE_TOKEN_SCHEME,
                 token_hash=hash_session_token("expired-token"),
                 password_hash=None,
                 expires_at=datetime.now(UTC) - timedelta(days=1),
