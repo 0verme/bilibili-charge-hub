@@ -30,5 +30,11 @@ class PasswordReset(BaseModel):
     new_password: str = Field(min_length=1, max_length=128)
 
 
+class AdminRecovery(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    recovery_token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=128)
+
+
 class UserUpdate(BaseModel):
     is_active: bool

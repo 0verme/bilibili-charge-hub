@@ -8,8 +8,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import create_app
-from app.models import Base, User, UserRole
+from app.models import Base, User, UserRole, UserSession
 from app.security import hash_password
+from app.settings import get_settings
 
 
 def enable_browser_writes(client: TestClient) -> None:
@@ -67,6 +68,27 @@ def test_setup_login_logout_flow(client: TestClient, db_factory: sessionmaker[Se
     response = client.post("/api/auth/login", json=credentials)
     assert response.status_code == 200
     assert response.json()["username"] == "owner"
+    assert all("Secure" not in value for value in response.headers.get_list("set-cookie"))
+
+
+def test_auth_cookies_follow_request_scheme(db_factory: sessionmaker[Session]) -> None:
+    app = create_app()
+
+    def override_db() -> Generator[Session, None, None]:
+        with db_factory() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override_db
+    credentials = {"username": "owner", "password": "correct-horse-42"}
+    with TestClient(app, base_url="http://testserver") as http_client:
+        response = http_client.post("/api/auth/setup", json=credentials)
+        assert response.status_code == 201
+        assert all("Secure" not in value for value in response.headers.get_list("set-cookie"))
+
+    with TestClient(app, base_url="https://testserver") as https_client:
+        response = https_client.post("/api/auth/login", json=credentials)
+        assert response.status_code == 200
+        assert all("Secure" in value for value in response.headers.get_list("set-cookie"))
 
 
 def test_setup_is_one_time_and_admin_can_create_user(client: TestClient) -> None:
@@ -111,6 +133,102 @@ def test_auth_pages_route_by_initialization_and_session_state(client: TestClient
     response = client.get("/setup", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
+
+    reset_page = client.get("/reset")
+    assert reset_page.status_code == 200
+    assert "重置管理员密码" in reset_page.text
+    assert "ADMIN_RECOVERY_TOKEN" in reset_page.text
+    assert 'name="new_password"' in reset_page.text
+    assert 'name="new_password" type="password" required minlength="8"' not in reset_page.text
+
+
+def test_admin_recovery_requires_token_and_invalidates_sessions(
+    client: TestClient,
+    db_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recovery_token = "recovery-token-" + "x" * 40
+    monkeypatch.setenv("ADMIN_RECOVERY_TOKEN", recovery_token)
+    get_settings.cache_clear()
+    try:
+        original = {"username": "owner", "password": "old-password-42"}
+        assert client.post("/api/auth/setup", json=original).status_code == 201
+        first_session = client.cookies["session_token"]
+
+        client.cookies.clear()
+        assert client.post("/api/auth/login", json=original).status_code == 200
+        second_session = client.cookies["session_token"]
+        assert first_session != second_session
+        client.cookies.clear()
+
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": "wrong-token",
+                "new_password": "new-password-42",
+            },
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "invalid_recovery"
+
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": recovery_token,
+                "new_password": "x",
+            },
+        )
+        assert response.status_code == 204
+
+        with db_factory() as db:
+            user = db.scalar(select(User).where(User.username == "owner"))
+            assert user is not None
+            sessions = list(db.scalars(select(UserSession).where(UserSession.user_id == user.id)))
+            assert len(sessions) == 0
+
+        client.cookies.set("session_token", first_session)
+        assert client.get("/api/auth/me").status_code == 401
+        client.cookies.clear()
+        assert (
+            client.post(
+                "/api/auth/login",
+                json={"username": "owner", "password": "x"},
+            ).status_code
+            == 200
+        )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_admin_recovery_is_disabled_without_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADMIN_RECOVERY_TOKEN", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert (
+            client.post(
+                "/api/auth/setup",
+                json={"username": "owner", "password": "old-password-42"},
+            ).status_code
+            == 201
+        )
+        client.cookies.clear()
+        response = client.post(
+            "/api/auth/recover",
+            json={
+                "username": "owner",
+                "recovery_token": "unused-token",
+                "new_password": "new-password-42",
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "recovery_disabled"
+    finally:
+        get_settings.cache_clear()
 
 
 def test_setup_reopens_when_all_admins_are_disabled(
