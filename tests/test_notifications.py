@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.routers.notifications as notification_router
 from app.crypto import get_credential_cipher
 from app.models import (
     Base,
@@ -24,8 +25,17 @@ from app.notifications.service import (
     render_message,
 )
 from app.routers.notifications import (
+    ChannelInput,
+    SubscriptionRuleInput,
+    SubscriptionRulesInput,
+    delete_channel,
+    delivery_view,
+    list_deliveries,
+    list_subscriptions,
     mask_config,
     retry_delivery,
+    update_channel,
+    update_subscriptions,
     validate_channel_config,
 )
 from app.routers.notifications import test_channel as send_test_channel
@@ -156,8 +166,7 @@ def test_new_charge_message_matches_legacy_format() -> None:
     )
 
     assert render_message(event) == (
-        "【娇羞大学长】 在 【2026-08-14 08:12:37】\n"
-        "冲了 5.00B币 实际到账 3.36 元"
+        "【娇羞大学长】 在 【2026-08-14 08:12:37】\n冲了 5.00B币 实际到账 3.36 元"
     )
 
 
@@ -283,3 +292,265 @@ def test_disabled_channel_cannot_report_a_successful_test(notification_db: Sessi
     assert caught.value.status_code == 409
     assert caught.value.detail == "notification channel is disabled"
     assert notification_db.scalar(select(func.count()).select_from(NotificationOutbox)) == 0
+
+
+def test_update_channel_preserves_masked_secret(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    channel = NotificationChannel(
+        user_id=user.id,
+        name="telegram-channel",
+        provider="telegram",
+        encrypted_config=get_credential_cipher().encrypt_json(
+            {"bot_token": "real-bot-token-value", "chat_id": "old-chat"}
+        ),
+    )
+    notification_db.add(channel)
+    notification_db.flush()
+    notification_db.add(
+        NotificationSubscription(
+            user_id=user.id,
+            channel_id=channel.id,
+            event_type="new_charge",
+        )
+    )
+    notification_db.commit()
+
+    result = update_channel(
+        channel.id,
+        ChannelInput(
+            name="renamed",
+            provider="telegram",
+            config={"bot_token": "***alue", "chat_id": "new-chat"},
+            event_types=["cookie_expired"],
+        ),
+        user,
+        notification_db,
+    )
+
+    assert result.name == "renamed"
+    stored = notification_db.get(NotificationChannel, channel.id)
+    assert stored is not None
+    assert get_credential_cipher().decrypt_json(stored.encrypted_config) == {
+        "bot_token": "real-bot-token-value",
+        "chat_id": "new-chat",
+    }
+    assert result.event_types == ["cookie_expired"]
+
+
+def test_subscription_rules_are_editable_and_tenant_scoped(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    own_channel = add_channel(notification_db, user, "own", "good")
+    other_user = User(
+        username="other-notifier",
+        password_hash=hash_password("other-notifier-password-42"),
+        role=UserRole.USER,
+    )
+    notification_db.add(other_user)
+    notification_db.commit()
+    other_channel = add_channel(notification_db, other_user, "other", "good")
+
+    initial = list_subscriptions(user, notification_db)
+    assert initial.channels[0].id == own_channel.id
+    assert any(
+        rule.event_type == "new_charge" and rule.channel_ids == [own_channel.id]
+        for rule in initial.rules
+    )
+
+    updated = update_subscriptions(
+        SubscriptionRulesInput(
+            rules=[
+                SubscriptionRuleInput(event_type="new_charge", channel_ids=[]),
+                SubscriptionRuleInput(event_type="cookie_expired", channel_ids=[own_channel.id]),
+            ]
+        ),
+        user,
+        notification_db,
+    )
+    by_event = {rule.event_type: rule.channel_ids for rule in updated.rules}
+    assert by_event["new_charge"] == []
+    assert by_event["cookie_expired"] == [own_channel.id]
+
+    with pytest.raises(HTTPException) as caught:
+        update_subscriptions(
+            SubscriptionRulesInput(
+                rules=[
+                    SubscriptionRuleInput(event_type="new_charge", channel_ids=[other_channel.id])
+                ]
+            ),
+            user,
+            notification_db,
+        )
+    assert caught.value.status_code == 422
+
+
+def test_delivery_view_exposes_safe_event_context(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    channel = add_channel(notification_db, user, "visible", "good")
+    event = enqueue_event(
+        notification_db,
+        user.id,
+        "cookie_expired",
+        "cookie:view",
+        {
+            "account": "佳佳的B站号",
+            "account_uid": "123456",
+            "reason": "login expired",
+            "access_token": "must-not-be-returned",
+        },
+    )
+    assert event is not None
+    event.status = "failed"
+    delivery = NotificationDelivery(
+        user_id=user.id,
+        outbox_id=event.id,
+        channel_id=channel.id,
+        status="failed",
+        attempts=2,
+        error_type="provider_rejected",
+        response_summary="HTTP 400",
+    )
+    notification_db.add(delivery)
+    notification_db.commit()
+
+    view = delivery_view(delivery, event, channel)
+
+    assert view.event_type == "cookie_expired"
+    assert view.event_label == "Cookie 已失效"
+    assert view.channel_name == "visible"
+    assert view.account_name == "佳佳的B站号"
+    assert view.account_uid == "123456"
+    assert view.display_status == "failed"
+    assert view.attempts == 2
+    assert view.can_retry is True
+    assert view.payload_summary["access_token"] == "[已隐藏]"
+    assert "must-not-be-returned" not in str(view.payload_summary)
+
+
+def test_delivery_filters_and_channel_delete_preserve_audit(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    channel = add_channel(notification_db, user, "audit", "good")
+    event = enqueue_event(
+        notification_db,
+        user.id,
+        "new_charge",
+        "charge:audit",
+        {"supporter": "Alice", "amount": "30.00"},
+    )
+    assert event is not None
+    event.status = "failed"
+    delivery = NotificationDelivery(
+        user_id=user.id,
+        outbox_id=event.id,
+        channel_id=channel.id,
+        status="failed",
+        attempts=2,
+        error_type="provider_rejected",
+        response_summary="HTTP 503",
+    )
+    notification_db.add(delivery)
+    notification_db.commit()
+
+    failed = list_deliveries(user, notification_db, status_filter="failed")
+    assert [item.id for item in failed] == [delivery.id]
+    assert failed[0].event_summary == "Alice · 30.00 B币"
+
+    delete_channel(channel.id, user, notification_db)
+    notification_db.refresh(delivery)
+    assert notification_db.get(NotificationChannel, channel.id) is None
+    assert delivery.channel_id is None
+    assert notification_db.get(NotificationDelivery, delivery.id) is not None
+    assert list_subscriptions(user, notification_db).channels == []
+
+
+def test_retry_rejects_success_and_cross_tenant_access(notification_db: Session) -> None:
+    user = make_notification_user(notification_db)
+    channel = add_channel(notification_db, user, "retry", "good")
+    event = enqueue_event(
+        notification_db,
+        user.id,
+        "new_charge",
+        "charge:retry-guard",
+        {"supporter": "Alice", "amount": "1.00"},
+    )
+    assert event is not None
+    delivery = NotificationDelivery(
+        user_id=user.id,
+        outbox_id=event.id,
+        channel_id=channel.id,
+        status="succeeded",
+        attempts=1,
+    )
+    notification_db.add(delivery)
+    notification_db.commit()
+
+    with pytest.raises(HTTPException) as success_error:
+        retry_delivery(delivery.id, user, notification_db)
+    assert success_error.value.status_code == 409
+    assert "already succeeded" in success_error.value.detail
+
+    other_user = User(
+        username="retry-other",
+        password_hash=hash_password("retry-other-password-42"),
+        role=UserRole.USER,
+    )
+    notification_db.add(other_user)
+    notification_db.commit()
+    with pytest.raises(HTTPException) as tenant_error:
+        retry_delivery(delivery.id, other_user, notification_db)
+    assert tenant_error.value.status_code == 404
+
+
+def test_channel_test_targets_only_requested_channel(
+    notification_db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = make_notification_user(notification_db)
+    target = add_channel(notification_db, user, "target", "good")
+    other = add_channel(notification_db, user, "other", "good")
+    target_subscription = notification_db.scalar(
+        select(NotificationSubscription).where(
+            NotificationSubscription.channel_id == target.id,
+            NotificationSubscription.event_type == "scheduled_job_failed",
+        )
+    )
+    notification_db.add(
+        NotificationSubscription(
+            user_id=user.id,
+            channel_id=other.id,
+            event_type="scheduled_job_failed",
+        )
+    )
+    notification_db.commit()
+
+    class TargetedDeliveryService:
+        target_channel_id: str | None = None
+
+        async def deliver_event(
+            self, db: Session, event: NotificationOutbox, channel_id: str | None = None
+        ) -> None:
+            self.target_channel_id = channel_id
+            db.add(
+                NotificationDelivery(
+                    user_id=event.user_id,
+                    outbox_id=event.id,
+                    channel_id=channel_id,
+                    status="succeeded",
+                    attempts=1,
+                    response_summary="HTTP 200",
+                )
+            )
+            event.status = "delivered"
+            db.commit()
+
+        async def close(self) -> None:
+            return None
+
+    fake = TargetedDeliveryService()
+    monkeypatch.setattr(notification_router, "NotificationDeliveryService", lambda: fake)
+    result = asyncio.run(send_test_channel(target.id, user, notification_db))
+
+    assert result.success is True
+    assert fake.target_channel_id == target.id
+    assert target_subscription is None
+    deliveries = list(notification_db.scalars(select(NotificationDelivery)))
+    assert len(deliveries) == 1
+    assert deliveries[0].channel_id == target.id

@@ -237,8 +237,10 @@ class NotificationDelivery(Base):
     outbox_id: Mapped[str] = mapped_column(
         ForeignKey("notification_outbox.id", ondelete="CASCADE"), index=True
     )
-    channel_id: Mapped[str] = mapped_column(
-        ForeignKey("notification_channels.id", ondelete="CASCADE"), index=True
+    # A deleted channel must not erase the delivery audit trail. The API nulls this
+    # reference before deletion and PostgreSQL migrations use SET NULL as a guardrail.
+    channel_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notification_channels.id", ondelete="SET NULL"), index=True
     )
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

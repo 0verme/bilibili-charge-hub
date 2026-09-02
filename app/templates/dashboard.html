@@ -292,41 +292,166 @@
           </dialog>
         </section>
         <section id="notifications" class="view">
-          <section class="panel">
-            <h2>新建通知渠道</h2>
-            <form id="channel-form" class="form-grid">
-              <input name="name" placeholder="渠道名称" required /><select
-                name="provider"
-              >
-                <option value="feishu">飞书</option>
-                <option value="telegram">Telegram</option>
-                <option value="serverchan">Server酱</option>
-                <option value="webhook">通用 Webhook</option></select
-              ><input
-                name="endpoint"
-                placeholder="Webhook URL / Bot Token / SendKey"
-                required
-              /><input name="chat_id" placeholder="Telegram Chat ID" /><button>
-                保存
-              </button>
-            </form>
-          </section>
-          <div id="channel-list" class="grid"></div>
-          <section class="panel records">
-            <h2>最近投递</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>状态</th>
-                  <th>渠道</th>
-                  <th>次数</th>
-                  <th>结果</th>
-                </tr>
-              </thead>
-              <tbody id="delivery-list"></tbody>
-            </table>
-          </section>
+          <div class="notification-center">
+            <div class="notification-intro">
+              <div>
+                <p class="notification-eyebrow">NOTIFICATION CENTER</p>
+                <h2>通知中心</h2>
+                <p class="muted">
+                  管理通知渠道，明确事件去向，并随时查看最近的投递结果。
+                </p>
+              </div>
+            </div>
+            <div class="notification-tabs" role="tablist" aria-label="通知中心区域">
+              <button
+                type="button"
+                class="notification-tab active"
+                data-notification-tab="channels"
+                role="tab"
+                aria-selected="true"
+              >通知渠道</button>
+              <button
+                type="button"
+                class="notification-tab"
+                data-notification-tab="rules"
+                role="tab"
+                aria-selected="false"
+              >通知规则</button>
+              <button
+                type="button"
+                class="notification-tab"
+                data-notification-tab="deliveries"
+                role="tab"
+                aria-selected="false"
+              >发送记录</button>
+            </div>
+
+            <div id="notification-channels-panel" class="notification-tab-panel">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>选择通知方式</h2>
+                    <p>使用当前系统支持的 Provider 配置通知渠道。</p>
+                  </div>
+                </div>
+                <div id="notification-provider-state" class="notification-state hidden"></div>
+                <div id="notification-provider-list" class="notification-provider-grid"></div>
+              </section>
+              <section class="panel notification-configured-panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>已配置渠道</h2>
+                    <p>启用的渠道会按照通知规则接收事件。</p>
+                  </div>
+                </div>
+                <div id="notification-channel-state" class="notification-state hidden"></div>
+                <div id="channel-list" class="notification-channel-list"></div>
+              </section>
+            </div>
+
+            <div id="notification-rules-panel" class="notification-tab-panel hidden">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>什么事情 → 发到哪里</h2>
+                    <p>勾选事件与渠道的关系，保存后立即应用。</p>
+                  </div>
+                  <button id="notification-rules-save" type="button" disabled>保存规则</button>
+                </div>
+                <div id="notification-rules-state" class="notification-state hidden"></div>
+                <div class="table-scroll">
+                  <table class="notification-rules-table">
+                    <thead><tr id="notification-rules-head"></tr></thead>
+                    <tbody id="notification-rules-list"></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+
+            <div id="notification-deliveries-panel" class="notification-tab-panel hidden">
+              <section class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h2>发送记录</h2>
+                    <p>查看通知事件、目标渠道、投递状态和重试结果。</p>
+                  </div>
+                </div>
+                <form id="delivery-filters" class="notification-filter-grid">
+                  <select id="delivery-status-filter" name="status" aria-label="投递状态">
+                    <option value="">全部状态</option>
+                    <option value="succeeded">成功</option>
+                    <option value="failed">失败</option>
+                    <option value="waiting">等待发送 / 重试</option>
+                  </select>
+                  <select id="delivery-event-filter" name="event_type" aria-label="通知事件">
+                    <option value="">全部事件</option>
+                  </select>
+                  <select id="delivery-channel-filter" name="channel_id" aria-label="通知渠道">
+                    <option value="">全部渠道</option>
+                  </select>
+                  <button type="submit">筛选</button>
+                  <button id="delivery-filter-reset" type="button" class="secondary">重置</button>
+                </form>
+                <div id="notification-delivery-state" class="notification-state hidden"></div>
+                <div class="table-scroll">
+                  <table class="notification-delivery-table">
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>事件</th>
+                        <th>账号</th>
+                        <th>渠道</th>
+                        <th>状态</th>
+                        <th>尝试</th>
+                        <th>结果</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="delivery-list"></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </div>
         </section>
+
+        <dialog id="channel-dialog" aria-labelledby="channel-dialog-title">
+          <article class="notification-dialog">
+            <div class="dialog-heading">
+              <div>
+                <p class="notification-eyebrow">CHANNEL CONFIGURATION</p>
+                <h2 id="channel-dialog-title">配置通知渠道</h2>
+              </div>
+              <button id="channel-dialog-close" type="button" class="secondary dialog-close">关闭</button>
+            </div>
+            <form id="channel-form" class="notification-form">
+              <label class="field">渠道名称<input name="name" required maxlength="128" placeholder="例如：我的飞书群" /></label>
+              <label class="field">通知方式<select name="provider" required></select></label>
+              <div id="channel-fields" class="notification-form-fields"></div>
+              <p id="channel-secret-note" class="muted notification-secret-note">
+                敏感配置会加密保存；编辑时留空即可保持原值。
+              </p>
+              <p data-form-error class="error hidden"></p>
+              <div class="form-actions">
+                <button id="channel-dialog-cancel" type="button" class="secondary">取消</button>
+                <button id="channel-dialog-submit" type="submit">保存渠道</button>
+              </div>
+            </form>
+          </article>
+        </dialog>
+
+        <dialog id="delivery-detail" aria-labelledby="delivery-detail-title">
+          <article class="notification-dialog notification-detail-dialog">
+            <div class="dialog-heading">
+              <div>
+                <p class="notification-eyebrow">DELIVERY DETAIL</p>
+                <h2 id="delivery-detail-title">发送详情</h2>
+              </div>
+              <button id="delivery-detail-close" type="button" class="secondary dialog-close">关闭</button>
+            </div>
+            <div id="delivery-detail-body" class="notification-detail-body"></div>
+          </article>
+        </dialog>
         <section id="shares" class="view">
           <section class="panel">
             <h2>创建分享</h2>

@@ -186,6 +186,45 @@ def test_postgres_reconciliation_repairs_gaps_and_is_idempotent(
     assert record_a.id and record_b.id
 
 
+def test_postgres_channel_delete_preserves_delivery_audit(postgres_session: Session) -> None:
+    user = User(username="pg-channel-delete", password_hash=hash_password("postgres-delete-42"))
+    postgres_session.add(user)
+    postgres_session.flush()
+    channel = NotificationChannel(
+        user_id=user.id,
+        name="pg-delete-channel",
+        provider="webhook",
+        encrypted_config='{"url": "https://example.com/hook"}',
+    )
+    postgres_session.add(channel)
+    postgres_session.flush()
+    outbox = NotificationOutbox(
+        user_id=user.id,
+        event_type="cookie_expired",
+        dedupe_key="pg-channel-delete-event",
+        payload={"account": "test"},
+        status="delivered",
+        attempts=1,
+    )
+    postgres_session.add(outbox)
+    postgres_session.flush()
+    delivery = NotificationDelivery(
+        user_id=user.id,
+        outbox_id=outbox.id,
+        channel_id=channel.id,
+        status="succeeded",
+        attempts=1,
+    )
+    postgres_session.add(delivery)
+    postgres_session.flush()
+
+    postgres_session.delete(channel)
+    postgres_session.flush()
+    postgres_session.refresh(delivery)
+
+    assert delivery.channel_id is None
+
+
 def test_postgres_reconciliation_respects_delivery_unique_constraint(
     postgres_session: Session,
 ) -> None:
