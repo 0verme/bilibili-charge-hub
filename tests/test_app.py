@@ -74,8 +74,8 @@ def test_share_page_contains_dashboard_sections() -> None:
 
 
 def test_internal_dashboard_uses_shared_widgets_and_pagination() -> None:
-    template = __import__("pathlib").Path("app/templates/dashboard.html").read_text(
-        encoding="utf-8"
+    template = (
+        __import__("pathlib").Path("app/templates/dashboard.html").read_text(encoding="utf-8")
     )
     script = __import__("pathlib").Path("app/static/dashboard.js").read_text(encoding="utf-8")
 
@@ -85,3 +85,20 @@ def test_internal_dashboard_uses_shared_widgets_and_pagination() -> None:
     assert 'id="page-size"' in template
     assert 'item.remark || "—"' in script
     assert "widgets.renderSummary" in script
+
+
+def test_notification_center_has_channel_rule_and_delivery_tabs() -> None:
+    template = (
+        __import__("pathlib").Path("app/templates/dashboard.html").read_text(encoding="utf-8")
+    )
+    script = __import__("pathlib").Path("app/static/dashboard.js").read_text(encoding="utf-8")
+
+    for label in ("通知渠道", "通知规则", "发送记录"):
+        assert label in template
+    assert 'data-notification-tab="channels"' in template
+    assert 'data-notification-tab="rules"' in template
+    assert 'data-notification-tab="deliveries"' in template
+    assert "/api/notifications/catalog" in script
+    assert "/api/notifications/subscriptions" in script
+    assert "/api/notifications/deliveries/" in script
+    assert "innerHTML" not in script

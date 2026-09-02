@@ -30,6 +30,26 @@ EVENT_TYPES = {
     "daily_task_failed",
 }
 MAX_ATTEMPTS = 5
+SUCCESS_DELIVERY_STATUSES = {"succeeded", "delivered", "success"}
+
+
+def _iter_config_strings(value: object):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_config_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_config_strings(item)
+
+
+def _redacted_error(value: object, config: dict | None = None) -> str:
+    text = str(value)
+    for secret in _iter_config_strings(config or {}):
+        if secret:
+            text = text.replace(secret, "***")
+    return text[:300]
 
 
 def reset_delivery_for_retry(
@@ -178,8 +198,13 @@ class NotificationDeliveryService:
             "outbox_ids": outbox_ids,
         }
 
-    async def deliver_event(self, db: Session, event: NotificationOutbox) -> None:
-        subscriptions = db.execute(
+    async def deliver_event(
+        self,
+        db: Session,
+        event: NotificationOutbox,
+        channel_id: str | None = None,
+    ) -> None:
+        query = (
             select(NotificationSubscription, NotificationChannel)
             .join(
                 NotificationChannel,
@@ -192,12 +217,15 @@ class NotificationDeliveryService:
                 NotificationChannel.user_id == event.user_id,
                 NotificationChannel.enabled.is_(True),
             )
-        ).all()
+        )
+        if channel_id is not None:
+            query = query.where(NotificationChannel.id == channel_id)
+        subscriptions = db.execute(query).all()
         if not subscriptions:
             event.status = "pending"
             db.commit()
             return
-        successes = failures = 0
+        failures = 0
         for _subscription, channel in subscriptions:
             delivery = db.scalar(
                 select(NotificationDelivery).where(
@@ -205,12 +233,14 @@ class NotificationDeliveryService:
                     NotificationDelivery.channel_id == channel.id,
                 )
             )
-            if delivery and delivery.status == "succeeded":
-                successes += 1
+            if delivery and (delivery.status or "").lower() in SUCCESS_DELIVERY_STATUSES:
                 continue
-            if delivery and delivery.available_at.replace(tzinfo=UTC) > datetime.now(UTC):
-                failures += 1
-                continue
+            available_at = delivery.available_at if delivery else None
+            if available_at is not None:
+                available_at = available_at.replace(tzinfo=available_at.tzinfo or UTC)
+                if available_at > datetime.now(UTC):
+                    failures += 1
+                    continue
             delivery = delivery or NotificationDelivery(
                 user_id=event.user_id,
                 outbox_id=event.id,
@@ -218,20 +248,20 @@ class NotificationDeliveryService:
             )
             db.add(delivery)
             delivery.attempts = (delivery.attempts or 0) + 1
+            config: dict = {}
             try:
                 config = get_credential_cipher().decrypt_json(channel.encrypted_config)
                 provider = self.providers[channel.provider]
                 result = await provider.send(render_message(event), config)
                 delivery.status = "succeeded" if result.success else "failed"
-                delivery.response_summary = result.detail[:500]
+                delivery.response_summary = _redacted_error(result.detail, config)[:500]
                 delivery.error_type = None if result.success else "provider_rejected"
             except Exception as exc:
                 delivery.status = "failed"
                 delivery.error_type = type(exc).__name__[:64]
-                delivery.response_summary = f"{type(exc).__name__}: {str(exc)[:300]}"
+                delivery.response_summary = _redacted_error(f"{type(exc).__name__}: {exc}", config)
             if delivery.status == "succeeded":
                 delivery.delivered_at = datetime.now(UTC)
-                successes += 1
             else:
                 failures += 1
                 delivery.available_at = datetime.now(UTC) + timedelta(

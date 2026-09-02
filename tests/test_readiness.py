@@ -238,14 +238,23 @@ def test_0002_to_head_upgrade_preserves_existing_data(
         job_run_columns = {
             column["name"]: column for column in inspect(engine).get_columns("job_runs")
         }
-        delivery_columns = {
-            column["name"] for column in inspect(engine).get_columns("notification_deliveries")
-        }
+        delivery_column_details = inspect(engine).get_columns("notification_deliveries")
+        delivery_columns = {column["name"] for column in delivery_column_details}
+        delivery_channel = next(
+            column for column in delivery_column_details if column["name"] == "channel_id"
+        )
+        delivery_channel_fk = next(
+            foreign_key
+            for foreign_key in inspect(engine).get_foreign_keys("notification_deliveries")
+            if foreign_key["constrained_columns"] == ["channel_id"]
+        )
         assert "encrypted_refresh_token" not in account_columns
         assert "collection_watermark_at" in account_columns
         assert job_run_columns["status"]["type"].length == 14
         assert job_run_columns["trigger_type"]["nullable"] is False
         assert {"available_at", "error_type"} <= delivery_columns
+        assert delivery_channel["nullable"] is True
+        assert delivery_channel_fk["options"].get("ondelete") == "SET NULL"
         with engine.connect() as connection:
             assert (
                 connection.execute(
